@@ -2,7 +2,7 @@
 
 An independent, reproducible audit of whether decision models and LLMs are as calibrated as their vendors say. See [SPEC.md](SPEC.md).
 
-**Status:** M0 (dataset loaders + license manifest) and the ECE / Brier / AURC part of M2, with soft-label support. No model runners yet.
+**Status:** M0 (dataset loaders + license manifest), M1 (d1 and LLM logprob runners), and the ECE / Brier / AURC part of M2, with soft-label support.
 
 ```bash
 pip install -e ".[dev]"
@@ -35,6 +35,25 @@ Each dataset is pinned to an immutable revision. Splits: dedupe on text, drop te
 Every metric also accepts soft targets of shape (n, K). "Correct" then means rater agreement with the prediction, so ECE asks "is 70% confidence right where 70% of raters agree?". Soft-target scores have a non-zero floor (the raters' own disagreement), so they go in their own leaderboard column, never ranked against hard-target scores.
 
 Inputs are validated (shape, label range, rows that are finite distributions), because they will come from submitted files.
+
+## Runners (`cbench.runners`)
+
+```bash
+pip install -e ".[runners]"
+python -m cbench.runners d1 LiquidAI/d1-3B 051bcc464b01b9f92942b364d9586b0ef5912432 sentiment_hard toxicity
+python -m cbench.runners logprob Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc sentiment_hard
+```
+
+Each run writes `submissions/<model>/predictions.parquet` (`dataset, id, probs, latency_ms`, one full probability vector per item, in the dataset's option order) and `manifest.json` (model, commit, readout, dtype, device, library versions, and per dataset: split, limit, batch size, date). Re-running a dataset replaces its rows; a directory never mixes two models or commits.
+
+Every runner asks the dataset's fixed `question` from the manifest.
+
+- **`d1`** uses Liquid's own System One readout: one `choice` question; each option gets a one-token code scored at a single answer slot; `calibration=None` (their default, so the probabilities are an uncalibrated softmax and any calibration comes from training).
+- **`logprob`** works with any causal LM: P(option text + end-of-turn token | chat prompt), renormalised over the options. The end-of-turn token keeps `no` from absorbing `no_comment`'s mass. It is read from the chat template (the token after an assistant reply), not from `generation_config`: Qwen3.5-0.8B ships no generation config, its config eos is `<|endoftext|>`, and scoring with that moved 9 of 20 toxicity answers in a smoke run. The manifest records the `end_token` used.
+
+Revisions must be full commit SHAs. `trust_remote_code` runs the repo's Python, so a branch name would mean running whatever gets pushed next. Weights, tokenizer and code are loaded from one snapshot; d1's own loader fetches the tokenizer by repo name without a revision, and the snapshot closes that gap. I read d1's remote code at `051bcc46` before running it: it renders prompts and runs the model, with no network, subprocess or deserialization calls.
+
+Latency is batch wall time divided by batch size; per-decision p50/p99 needs `--batch-size 1`. The logprob runner recomputes the prompt for each option, which is fine for 2–3 options and slow for 77/151 (sharing the KV cache is the fix when it matters).
 
 ## Verification log (SPEC §10, checked 2026-10-24)
 

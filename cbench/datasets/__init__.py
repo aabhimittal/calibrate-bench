@@ -29,6 +29,7 @@ N_CALIB, N_TEST = 500, 2000
 class Source:
     name: str
     task: str
+    question: str  # what every runner asks the model, verbatim; part of the benchmark definition
     license: str
     license_evidence: str
     origin: str
@@ -52,6 +53,7 @@ SOURCES = {
         Source(
             name="sentiment_hard",
             task="3-way sentiment on adversarially collected sentences",
+            question="What is the overall sentiment of this sentence?",
             license="CC-BY-4.0",
             license_evidence="'License' section of the dataset README and data_license in "
             "hf.co/datasets/dynabench/dynasent/dynasent.py; upstream github.com/cgpotts/dynasent",
@@ -66,6 +68,7 @@ SOURCES = {
         Source(
             name="intent_routing",
             task="151-way intent routing incl. out-of-scope",
+            question="Which intent does this user query express? Use oos if it matches none of the supported intents.",
             license="CC-BY-3.0",
             license_evidence="license tag on hf.co/datasets/clinc/clinc_oos",
             origin="hf://datasets/clinc/clinc_oos/plus/test-00000-of-00001.parquet",
@@ -77,6 +80,7 @@ SOURCES = {
         Source(
             name="toxicity",
             task="binary toxicity",
+            question="Is this comment toxic, i.e. rude, disrespectful or unreasonable enough to make someone leave a discussion?",
             license="CC0-1.0",
             license_evidence="license tag on hf.co/datasets/google/civil_comments",
             origin="hf://datasets/google/civil_comments/data/test-00000-of-00001.parquet",
@@ -89,6 +93,7 @@ SOURCES = {
         Source(
             name="code_review_risk",
             task="binary: does this diff hunk draw a reviewer comment",
+            question="Will a code reviewer leave a comment on this change?",
             license="CC-BY-4.0",
             license_evidence="zenodo.org/records/6900648 metadata (upstream release); "
             "the HF mirror used for download has no card of its own",
@@ -101,6 +106,7 @@ SOURCES = {
         Source(
             name="ticket_triage",
             task="77-way routing of banking customer-service queries (STAND-IN)",
+            question="Which category does this banking customer query belong to?",
             license="CC-BY-4.0",
             license_evidence="LICENSE file in github.com/PolyAI-LDN/task-specific-datasets at the pinned "
             "commit; license tag on hf.co/datasets/PolyAI/banking77",
