@@ -1,7 +1,10 @@
 """Calibration and selective-prediction metrics (M2).
 
-All functions take probs of shape (n, K) and integer labels of shape (n,).
+All functions take probs of shape (n, K) and labels that are either integers of shape (n,)
+or soft targets of shape (n, K) (e.g. the share of raters picking each option).
 Confidence is the max probability and the prediction is its argmax (ties -> lowest index).
+"Correct" is the target mass on the prediction: 0/1 for hard labels, rater agreement for soft ones.
+Soft-target scores have a non-zero floor (rater disagreement); never rank them against hard-target scores.
 """
 
 from __future__ import annotations
@@ -11,21 +14,29 @@ from typing import Callable
 import numpy as np
 
 
+def _is_distribution(a):
+    return np.isfinite(a).all() and (a >= 0).all() and np.allclose(a.sum(1), 1, atol=1e-6)
+
+
 def _check(probs, labels):
-    """Trust boundary: predictions arrive from submitted parquet files."""
+    """Trust boundary: predictions arrive from submitted parquet files. Returns (probs, targets (n, K))."""
     probs, labels = np.asarray(probs, dtype=float), np.asarray(labels)
-    if probs.ndim != 2 or len(probs) == 0 or labels.shape != (len(probs),):
-        raise ValueError(f"need probs (n, K) and labels (n,), got {probs.shape} and {labels.shape}")
+    if probs.ndim != 2 or len(probs) == 0 or labels.shape not in ((len(probs),), probs.shape):
+        raise ValueError(f"need probs (n, K) and labels (n,) or (n, K), got {probs.shape} and {labels.shape}")
+    if not _is_distribution(probs):
+        raise ValueError("each row of probs must be a finite, non-negative distribution summing to 1")
+    if labels.ndim == 2:
+        if not _is_distribution(labels.astype(float)):
+            raise ValueError("each row of soft labels must be a finite, non-negative distribution summing to 1")
+        return probs, labels.astype(float)
     if not np.issubdtype(labels.dtype, np.integer) or labels.min() < 0 or labels.max() >= probs.shape[1]:
         raise ValueError("labels must be integers in [0, K)")
-    if not np.isfinite(probs).all() or (probs < 0).any() or not np.allclose(probs.sum(1), 1, atol=1e-6):
-        raise ValueError("each row of probs must be a finite, non-negative distribution summing to 1")
-    return probs, labels
+    return probs, np.eye(probs.shape[1])[labels]
 
 
 def _confidence(probs, labels):
-    probs, labels = _check(probs, labels)
-    return probs.max(1), (probs.argmax(1) == labels).astype(float)
+    probs, targets = _check(probs, labels)
+    return probs.max(1), targets[np.arange(len(probs)), probs.argmax(1)]
 
 
 def ece(probs, labels, n_bins: int = 15) -> float:
@@ -38,8 +49,8 @@ def ece(probs, labels, n_bins: int = 15) -> float:
 
 def brier(probs, labels) -> float:
     """Multiclass Brier score: mean over examples of sum_k (p_k - y_k)^2. Range [0, 2]."""
-    probs, labels = _check(probs, labels)
-    return float(((probs - np.eye(probs.shape[1])[labels]) ** 2).sum(1).mean())
+    probs, targets = _check(probs, labels)
+    return float(((probs - targets) ** 2).sum(1).mean())
 
 
 def risk_coverage(probs, labels) -> tuple[np.ndarray, np.ndarray]:
@@ -65,8 +76,8 @@ def bootstrap_ci(
     metric: Callable, probs, labels, n_resamples: int = 1000, alpha: float = 0.05, seed: int = 0
 ) -> tuple[float, float, float]:
     """(point estimate, lower, upper) via the percentile bootstrap over examples."""
-    probs, labels = _check(probs, labels)
-    idx = np.random.default_rng(seed).integers(0, len(labels), size=(n_resamples, len(labels)))
-    stats = [metric(probs[i], labels[i]) for i in idx]
+    probs, targets = _check(probs, labels)
+    idx = np.random.default_rng(seed).integers(0, len(targets), size=(n_resamples, len(targets)))
+    stats = [metric(probs[i], targets[i]) for i in idx]
     lo, hi = np.quantile(stats, [alpha / 2, 1 - alpha / 2])
-    return metric(probs, labels), float(lo), float(hi)
+    return metric(probs, targets), float(lo), float(hi)

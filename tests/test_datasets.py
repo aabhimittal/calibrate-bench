@@ -2,6 +2,7 @@ import hashlib
 import os
 import re
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -34,15 +35,17 @@ def test_duplicates_deduped_and_conflicting_labels_dropped():
     assert sorted(assign_splits(df, "toy").text) == ["a", "c"]
 
 
-def test_manifest_every_slot_is_pinned_licensed_or_blocked():
-    assert len(SOURCES) == 5
+def test_extra_columns_follow_their_rows():
+    df = _toy(20).assign(soft=[[i, -i] for i in range(20)])
+    out = assign_splits(df, "toy", n_calib=5, n_test=5)
+    assert list(out.columns) == ["id", "text", "label", "soft", "split"]
+    assert all(s[0] == int(t.split()[1]) for s, t in zip(out.soft, out.text))
+
+
+def test_manifest_every_slot_is_pinned_and_licensed():
+    assert set(SOURCES) == set(LOADERS) and len(SOURCES) == 5
     for name, src in SOURCES.items():
-        if src.blocked:
-            assert name not in LOADERS
-            with pytest.raises(RuntimeError, match="blocked"):
-                load(name)
-            continue
-        assert name in LOADERS and src.license and src.license_evidence and src.citation
+        assert src.license and src.license_evidence and src.citation, name
         assert re.fullmatch(r"[0-9a-f]{40}|sha256:[0-9a-f]{64}", src.revision), name
 
 
@@ -53,7 +56,9 @@ FINGERPRINTS = {
     "intent_routing": "01d404763583caf3",
     "toxicity": "603ff87fc9742859",
     "code_review_risk": "c83ebb8fdc2ee45a",
+    "ticket_triage": "c4f3e4573478a386",
 }
+SOFT = {"sentiment_hard", "toxicity"}
 
 
 @pytest.mark.skipif(not os.environ.get("CBENCH_NETWORK"), reason="set CBENCH_NETWORK=1 to download datasets")
@@ -61,8 +66,15 @@ FINGERPRINTS = {
 def test_load_real_dataset(name):
     ds = load(name)
     df = ds.df
-    assert list(df.columns) == ["id", "text", "label", "split"]
+    soft = ["soft"] if name in SOFT else []
+    assert list(df.columns) == ["id", "text", "label", *soft, "split"]
     assert df.split.value_counts().to_dict() == {"calib": N_CALIB, "test": N_TEST}
     assert df.id.is_unique and df.label.between(0, len(ds.options) - 1).all()
+    if soft:
+        targets = np.array(df.soft.tolist())
+        assert targets.shape == (len(df), len(ds.options))
+        np.testing.assert_allclose(targets.sum(1), 1)
+        # the hard label must be (one of) the most-voted options
+        assert (targets[np.arange(len(df)), df.label] >= targets.max(1) - 1e-9).all()
     key = ",".join(df.id + ":" + df.label.astype(str) + ":" + df.split)
     assert hashlib.sha256(key.encode()).hexdigest()[:16] == FINGERPRINTS[name]
