@@ -83,9 +83,36 @@ def test_bootstrap_ci_degenerate_has_zero_width():
     assert bootstrap_ci(ece, probs, np.zeros(10, int), n_resamples=50) == (0.0, 0.0, 0.0)
 
 
+# Soft targets: "correct" becomes rater agreement with the prediction.
+#   i  probs      target     pred conf agreement
+#   0  (.8, .2)   (.6, .4)   0    .8   .6
+#   1  (.6, .4)   (1., 0.)   0    .6   1.0
+SOFT_PROBS = np.array([[0.8, 0.2], [0.6, 0.4]])
+SOFT_TARGETS = np.array([[0.6, 0.4], [1.0, 0.0]])
+
+
+def test_soft_targets_hand_computed():
+    # ECE, 1 bin: |mean agreement .8 - mean conf .7| = .1 ; 2 bins: (|1 - .6| + |.6 - .8|) / 2 = .3
+    assert ece(SOFT_PROBS, SOFT_TARGETS, n_bins=1) == pytest.approx(0.1)
+    assert ece(SOFT_PROBS, SOFT_TARGETS, n_bins=2) == pytest.approx(0.3)
+    # Brier: (.2^2 + .2^2) = .08 ; (.4^2 + .4^2) = .32 -> mean .2
+    assert brier(SOFT_PROBS, SOFT_TARGETS) == pytest.approx(0.2)
+    # AURC: by conf desc, risk = 1 - agreement: item 0 -> .4/1 ; both -> .4/2 = .2 -> (.4 + .2)/2 = .3
+    assert aurc(SOFT_PROBS, SOFT_TARGETS) == pytest.approx(0.3)
+
+
+def test_one_hot_soft_targets_equal_hard_labels():
+    one_hot = np.eye(2)[LABELS]
+    for metric in (ece, brier, aurc):
+        assert metric(PROBS, one_hot) == pytest.approx(metric(PROBS, LABELS))
+    assert bootstrap_ci(brier, PROBS, one_hot, n_resamples=50) == bootstrap_ci(brier, PROBS, LABELS, n_resamples=50)
+
+
 @pytest.mark.parametrize(
     "probs, labels",
     [
+        ([[0.5, 0.5]], [[0.7, 0.7]]),  # soft target doesn't sum to 1
+        ([[0.5, 0.5]], [[0.5, 0.25, 0.25]]),  # soft target has wrong K
         ([[0.5, 0.6]], [0]),  # doesn't sum to 1
         ([[1.2, -0.2]], [0]),  # negative
         ([[np.nan, 1.0]], [0]),  # non-finite

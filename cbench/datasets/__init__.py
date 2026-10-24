@@ -35,14 +35,15 @@ class Source:
     revision: str
     citation: str
     notes: str = ""
-    blocked: str = ""  # non-empty = reason this slot has no loader
 
 
 @dataclass(frozen=True)
 class Dataset:
     source: Source
     options: tuple[str, ...]
-    df: pd.DataFrame  # columns: id, text, label (index into options), split ("calib" | "test")
+    # columns: id, text, label (index into options), [soft], split ("calib" | "test")
+    # soft = rater distribution over options, only where the source records individual raters
+    df: pd.DataFrame
 
 
 SOURCES = {
@@ -59,7 +60,8 @@ SOURCES = {
             revision="sha256:33001cf394618aa38f9530c43ca87072b92f5ee609a02afa2d168d25560cedfd",
             citation="Potts et al. 2021, DynaSent: A Dynamic Benchmark for Sentiment Analysis (ACL)",
             notes="Round 1 + Round 2 test files; 5 MTurk validators, gold = majority of >=3; "
-            "'mixed' and no-majority examples dropped.",
+            "'mixed' and no-majority examples dropped. soft = validator votes over the 3 options "
+            "('mixed' votes excluded).",
         ),
         Source(
             name="intent_routing",
@@ -81,7 +83,8 @@ SOURCES = {
             revision="f2970eb3a55777454c94069077cc8d9b5866312d",
             citation="Borkan et al. 2019, Nuanced Metrics for Measuring Unintended Bias (WWW)",
             notes="toxicity is the fraction of raters saying toxic; label = toxicity >= 0.5 "
-            "(Jigsaw convention). Natural ~8% positive rate is kept.",
+            "(Jigsaw convention), soft = [1 - toxicity, toxicity]. Natural ~8% positive rate is kept. "
+            "Contamination risk: the d1-3B model card reports Civil Comments as one of Liquid AI's own evals.",
         ),
         Source(
             name="code_review_risk",
@@ -97,13 +100,17 @@ SOURCES = {
         ),
         Source(
             name="ticket_triage",
-            task="support-ticket routing",
-            license="",
-            license_evidence="",
-            origin="",
-            revision="",
-            citation="",
-            blocked="No human-labeled, permissively licensed candidate found. The most used HF "
+            task="77-way routing of banking customer-service queries (STAND-IN)",
+            license="CC-BY-4.0",
+            license_evidence="LICENSE file in github.com/PolyAI-LDN/task-specific-datasets at the pinned "
+            "commit; license tag on hf.co/datasets/PolyAI/banking77",
+            origin="https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/"
+            "57ec275d8078af65b7731c2a98be812d844a6d6b/banking_data/test.csv",
+            revision="sha256:d12d6e3bc4c3103966ae786dc435913c0c563dfa328f5a3646d0e62cfeeb474d",
+            citation="Casanueva et al. 2020, Efficient Intent Detection with Dual Sentence Encoders "
+            "(NLP4ConvAI)",
+            notes="Stand-in: single-sentence queries, not real multi-turn tickets, and overlaps in kind with "
+            "intent_routing. No human-labeled, permissively licensed ticket set was found; the most used HF "
             "option (Tobi-Bueck/customer-support-tickets) is synthetic and CC-BY-NC-4.0.",
         ),
     ]
@@ -134,8 +141,15 @@ def _sentiment_hard(src: Source):
         for r in ("round01-yelp", "round02-dynabench")
         for line in z.open(f"dynasent-v1.1/dynasent-v1.1-{r}-test.jsonl")
     ]
-    df = pd.DataFrame({"text": [r["sentence"] for r in rows], "gold": [r["gold_label"] for r in rows]})
-    df = df[df.gold.isin(options)]
+    votes = [[len(r["label_distribution"][o]) for o in options] for r in rows]
+    df = pd.DataFrame(
+        {
+            "text": [r["sentence"] for r in rows],
+            "gold": [r["gold_label"] for r in rows],
+            "soft": [[v / sum(c) if sum(c) else 0.0 for v in c] for c in votes],
+        }
+    )
+    df = df[df.gold.isin(options)]  # gold in options means >= 3 votes for it, so soft sums to 1
     return options, df.assign(label=df.gold.map(options.index))
 
 
@@ -147,7 +161,8 @@ def _intent_routing(src: Source):
 
 def _toxicity(src: Source):
     df = pd.read_parquet(_hf(src), columns=["text", "toxicity"])
-    return ("non_toxic", "toxic"), df.assign(label=(df.toxicity >= 0.5).astype(int))
+    t = df.toxicity.astype(float)
+    return ("non_toxic", "toxic"), df.assign(label=(t >= 0.5).astype(int), soft=[[1 - x, x] for x in t])
 
 
 def _code_review_risk(src: Source):
@@ -159,28 +174,35 @@ def _code_review_risk(src: Source):
     return ("no_comment", "needs_comment"), pd.DataFrame(rows, columns=["text", "label"])
 
 
+def _ticket_triage(src: Source):
+    df = pd.read_csv(_fetch(src.origin, src.revision.removeprefix("sha256:")))
+    options = tuple(sorted(df.category.unique()))
+    return options, df.assign(label=df.category.map(options.index))
+
+
 LOADERS = {
     "sentiment_hard": _sentiment_hard,
     "intent_routing": _intent_routing,
     "toxicity": _toxicity,
     "code_review_risk": _code_review_risk,
+    "ticket_triage": _ticket_triage,
 }
 
 
 def assign_splits(df: pd.DataFrame, name: str, n_calib: int = N_CALIB, n_test: int = N_TEST) -> pd.DataFrame:
     """Dedupe on text, then take a hash-ordered sample: first n_calib rows -> calib, next n_test -> test."""
+    cols = list(df.columns)
     n_labels = df.groupby("text")["label"].nunique()
+    # shortcut: for exact duplicates, any extra column (e.g. soft) comes from the first upstream row; rare.
     df = df[df.text.map(n_labels) == 1].drop_duplicates("text")  # texts with conflicting labels are dropped
     ids = df.text.map(lambda t: hashlib.sha256(t.encode()).hexdigest()[:16])
     key = ids.map(lambda i: hashlib.sha256(f"{name}:{i}".encode()).hexdigest())
     df = df.assign(id=ids, _key=key).sort_values("_key").head(n_calib + n_test)
     df["split"] = ["calib" if i < n_calib else "test" for i in range(len(df))]
-    return df[["id", "text", "label", "split"]].reset_index(drop=True)
+    return df[["id", *cols, "split"]].reset_index(drop=True)
 
 
 def load(name: str) -> Dataset:
     src = SOURCES[name]
-    if src.blocked:
-        raise RuntimeError(f"{name} is blocked: {src.blocked}")
     options, df = LOADERS[name](src)
-    return Dataset(src, options, assign_splits(df[["text", "label"]], name))
+    return Dataset(src, options, assign_splits(df[[c for c in ("text", "label", "soft") if c in df]], name))
