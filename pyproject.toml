@@ -1,0 +1,17 @@
+[project]
+name = "cbench"
+version = "0.1.0"
+description = "CALIBRATE-BENCH: an independent audit of decision-model calibration"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = ["numpy>=1.24", "pandas>=2.0", "pyarrow>=14", "huggingface_hub>=0.20"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["cbench*"]
