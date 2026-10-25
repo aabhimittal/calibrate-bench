@@ -160,4 +160,4 @@ def report(preds: pd.DataFrame) -> pd.DataFrame:
             "kl": float(kl(p, q).mean()),
             "any_flip": float(pd.Series(f).groupby(g.id.to_numpy()).max().mean()),
         })
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=["dataset", "family", "items", "variants", "flip_rate", "kl", "any_flip"])

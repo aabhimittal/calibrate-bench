@@ -2,7 +2,7 @@
 
 An independent, reproducible audit of whether decision models and LLMs are as calibrated as their vendors say. See [SPEC.md](SPEC.md).
 
-**Status:** M0 (dataset loaders + license manifest), M1 (d1, LLM logprob and Claude verbal runners), M3 (option-order, typo and paraphrase perturbations), and the ECE / Brier / AURC part of M2, with soft-label support.
+**Status:** M0 (dataset loaders + license manifest), M1 (d1, LLM logprob and Claude verbal runners), M3 (option-order, typo and paraphrase perturbations), M4 (CI-scored submissions and a static leaderboard), and the ECE / Brier / AURC part of M2, with soft-label support.
 
 ```bash
 pip install -e ".[dev]"
@@ -79,6 +79,22 @@ All perturbations are seeded by dataset and item, so every model sees identical 
 Paraphrases can change meaning, so they are not results until a person has checked a sample: `python -m cbench.perturb spotcheck DATASET sheet.csv`, fill `same_meaning` with y/n, then `python -m cbench.perturb agreement sheet.csv` and report that number next to paraphrase scores. Paraphrases written by Claude may suit Claude's own style; score Claude's verbal runner on them with that caveat, or use another generator.
 
 The edit family is a random-search attack with a fixed budget, not gradient or model-specific search, so `any_flip` is a lower bound on how attackable a model is. Word-level edits are not included: inserting or dropping words can change meaning ("not"), which a flip rate can't tell apart from fragility.
+
+## Submitting to the leaderboard (`cbench.leaderboard`, M4)
+
+1. Run a runner over the **full test split** of any datasets you choose (and optionally perturbations). It writes `submissions/<name>/predictions.parquet` and `manifest.json`.
+2. Open a pull request that adds only those two files under one `submissions/<name>/` directory.
+3. The `submission` workflow checks the PR touches nothing else, validates the files and posts the recomputed scores in the job summary. Nobody submits their own numbers: accuracy, ECE, Brier and AURC with 95% bootstrap intervals, soft-label scores, perturbation flip rates and latency all come from the raw probabilities.
+4. After merge, the `leaderboard` workflow rebuilds the site with `main`'s scoring code and deploys it to GitHub Pages (enable once: Settings → Pages → Source: GitHub Actions).
+
+```bash
+python -m cbench.leaderboard check submissions/<name>      # what CI runs on a submission PR
+python -m cbench.leaderboard build submissions site         # the site: site/index.html + site/leaderboard.json
+```
+
+Submissions that don't cover a dataset's whole test split are scored and shown, but marked partial and listed after the ranked ones. Complete submissions are ranked by Brier score, a proper scoring rule, within each dataset.
+
+**How the scores stay honest.** A PR's CI normally runs the PR's own code, so a submission could also edit `cbench/metrics` and score itself perfectly. The submission workflow never runs PR code: it installs `cbench` from the base commit, and that copy checks the PR's changed paths (read NUL-separated, without rename detection) and scores its files as data. A PR that changes anything outside one submission directory, or adds any other file such as a scores file, is rejected. Labels come from `cbench/leaderboard/labels.parquet` (hashed ids, labels and rater distributions; no texts), so CI downloads no datasets; a network test regenerates it from the loaders and compares. Model names and other manifest text are HTML-escaped on the page.
 
 ## Verification log (SPEC §10, checked 2026-10-24)
 
