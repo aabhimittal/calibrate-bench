@@ -2,7 +2,7 @@
 
 An independent, reproducible audit of whether decision models and LLMs are as calibrated as their vendors say. See [SPEC.md](SPEC.md).
 
-**Status:** M0 (dataset loaders + license manifest), M1 (d1 and LLM logprob runners), and the ECE / Brier / AURC part of M2, with soft-label support.
+**Status:** M0 (dataset loaders + license manifest), M1 (d1, LLM logprob and Claude verbal runners), M3 (option-order, typo and paraphrase perturbations), and the ECE / Brier / AURC part of M2, with soft-label support.
 
 ```bash
 pip install -e ".[dev]"
@@ -42,18 +42,43 @@ Inputs are validated (shape, label range, rows that are finite distributions), b
 pip install -e ".[runners]"
 python -m cbench.runners d1 LiquidAI/d1-3B 051bcc464b01b9f92942b364d9586b0ef5912432 sentiment_hard toxicity
 python -m cbench.runners logprob Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc sentiment_hard
+pip install -e ".[api]"   # needs Anthropic credentials
+python -m cbench.runners verbal claude-opus-5-5 sentiment_hard
 ```
 
-Each run writes `submissions/<model>/predictions.parquet` (`dataset, id, probs, latency_ms`, one full probability vector per item, in the dataset's option order) and `manifest.json` (model, commit, readout, dtype, device, library versions, and per dataset: split, limit, batch size, date). Re-running a dataset replaces its rows; a directory never mixes two models or commits.
+Each run writes `submissions/<model>/predictions.parquet` (`dataset, id, variant, probs, latency_ms`, one full probability vector per item, in the dataset's option order; `variant` is `orig` or a perturbation, see below) and `manifest.json` (model, commit, readout, dtype, device, library versions, and per dataset: split, limit, batch size, date). Re-running a dataset replaces its rows; a directory never mixes two models or commits.
 
 Every runner asks the dataset's fixed `question` from the manifest.
 
 - **`d1`** uses Liquid's own System One readout: one `choice` question; each option gets a one-token code scored at a single answer slot; `calibration=None` (their default, so the probabilities are an uncalibrated softmax and any calibration comes from training).
+- **`verbal`** is for hosted models with no token logprobs. The Claude Messages API has none (the live API reference never mentions them, and sampling parameters are gone too), so the model states a probability per option through a JSON schema, renormalised to 1. That is *verbalized* confidence, a different instrument from a logprob, so it is reported separately. Effort defaults to `low`; refusals are dropped and counted rather than handed to a fallback model, because a fallback would score another model under this one's name.
 - **`logprob`** works with any causal LM: P(option text + end-of-turn token | chat prompt), renormalised over the options. The end-of-turn token keeps `no` from absorbing `no_comment`'s mass. It is read from the chat template (the token after an assistant reply), not from `generation_config`: Qwen3.5-0.8B ships no generation config, its config eos is `<|endoftext|>`, and scoring with that moved 9 of 20 toxicity answers in a smoke run. The manifest records the `end_token` used.
 
 Revisions must be full commit SHAs. `trust_remote_code` runs the repo's Python, so a branch name would mean running whatever gets pushed next. Weights, tokenizer and code are loaded from one snapshot; d1's own loader fetches the tokenizer by repo name without a revision, and the snapshot closes that gap. I read d1's remote code at `051bcc46` before running it: it renders prompts and runs the model, with no network, subprocess or deserialization calls.
 
-Latency is batch wall time divided by batch size; per-decision p50/p99 needs `--batch-size 1`. The logprob runner recomputes the prompt for each option, which is fine for 2–3 options and slow for 77/151 (sharing the KV cache is the fix when it matters).
+Latency is batch wall time divided by batch size; per-decision p50/p99 needs `--batch-size 1`. The logprob runner encodes the prompt once per item, batched 16 wide, and deep-copies that cache for each chunk of options. Hybrid models such as Qwen3.5 can't batch-repeat their linear-attention state, but every cache can be copied; scores match a full forward pass per option to 1e-5.
+
+## Perturbations (`cbench.perturb`, M3)
+
+```bash
+python -m cbench.runners logprob MODEL SHA sentiment_hard --perturb order --variants 3
+python -m cbench.runners logprob MODEL SHA sentiment_hard --perturb edit --variants 8
+python -m cbench.perturb report submissions/MODEL/predictions.parquet
+```
+
+Each family is a separate run whose rows sit next to the `orig` rows; the report compares every variant with its item's original.
+
+| Family | What changes | Measures |
+|---|---|---|
+| `order` | The options are shown in another order (reversed first, then seeded shuffles); probabilities are mapped back to the canonical order | Option-order sensitivity: flip rate and KL |
+| `edit` | One keyboard typo (swap, drop, double or replace a letter, first letter kept) in a 4+ letter word; `--variants` is the attack budget | Robustness: per-edit flip rate, and `any_flip` = share of items where some edit in the budget flips the answer |
+| `paraphrase` | Stored paraphrases from `python -m cbench.perturb paraphrase DATASET` (Claude, structured output) | Consistency: paraphrase KL and flip rate |
+
+All perturbations are seeded by dataset and item, so every model sees identical inputs. `code_review_risk` gets order perturbations only: a typo or paraphrase in a diff changes the code, so the label may not hold.
+
+Paraphrases can change meaning, so they are not results until a person has checked a sample: `python -m cbench.perturb spotcheck DATASET sheet.csv`, fill `same_meaning` with y/n, then `python -m cbench.perturb agreement sheet.csv` and report that number next to paraphrase scores. Paraphrases written by Claude may suit Claude's own style; score Claude's verbal runner on them with that caveat, or use another generator.
+
+The edit family is a random-search attack with a fixed budget, not gradient or model-specific search, so `any_flip` is a lower bound on how attackable a model is. Word-level edits are not included: inserting or dropping words can change meaning ("not"), which a flip rate can't tell apart from fragility.
 
 ## Verification log (SPEC §10, checked 2026-10-24)
 

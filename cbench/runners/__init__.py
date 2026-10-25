@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 
+import cbench.perturb as perturb_mod
 from cbench.datasets import load
 from cbench.metrics import _check
 
@@ -129,24 +130,32 @@ class LogprobLLM:
         return self.tok(prompt, add_special_tokens=False).input_ids
 
     def option_logprobs(self, text, question, options) -> list[float]:
+        import copy
+
         import torch
 
         prompt = self._prompt_ids(text, question, options)
         lead = "" if self.tok.chat_template else " "
         conts = [self.tok(lead + o, add_special_tokens=False).input_ids + [self.eos] for o in options]
-        out = [0.0] * len(options)
+        b = min(self.option_batch, len(options))
+        # The prompt (minus its last token) is encoded once, already batched b-wide: hybrid caches (e.g. Qwen3.5's
+        # linear-attention layers) can't be batch-repeated later, but every cache type can be deep-copied.
+        with torch.no_grad():
+            head = torch.tensor([prompt[:-1]] * b, device=self.device)
+            cache = self.model(input_ids=head, use_cache=True).past_key_values
         by_len: dict[int, list[int]] = {}
         for i, c in enumerate(conts):
             by_len.setdefault(len(c), []).append(i)
-        # Equal-length rows need no padding. shortcut: the prompt is recomputed per option; share its KV cache
-        # when running the 77/151-option datasets at scale.
-        for n, idx in by_len.items():
-            for k in range(0, len(idx), self.option_batch):
-                chunk = idx[k : k + self.option_batch]
-                ids = torch.tensor([prompt + conts[i] for i in chunk], device=self.device)
+        out = [0.0] * len(options)
+        for n, idx in by_len.items():  # equal-length rows need no padding
+            for k in range(0, len(idx), b):
+                chunk = idx[k : k + b]
+                rows = [[prompt[-1]] + conts[i] for i in chunk]
+                rows += [rows[-1]] * (b - len(rows))  # fill to the cache's batch size, extra rows are dropped
+                ids = torch.tensor(rows, device=self.device)
                 with torch.no_grad():
-                    logits = self.model(input_ids=ids, logits_to_keep=n + 1).logits[:, :-1].float()
-                lp = logits.log_softmax(-1).gather(-1, ids[:, -n:, None]).squeeze(-1).sum(-1)
+                    logits = self.model(input_ids=ids, past_key_values=copy.deepcopy(cache)).logits[:, :-1].float()
+                lp = logits.log_softmax(-1).gather(-1, ids[:, 1:, None]).squeeze(-1).sum(-1)
                 for i, v in zip(chunk, lp.tolist()):
                     out[i] = v
         return out
@@ -162,20 +171,118 @@ class LogprobLLM:
         return rows
 
 
-def run(runner, dataset: str, split: str = "test", limit: int | None = None, batch_size: int = 8):
-    """Predictions for one dataset split: columns dataset, id, probs, latency_ms."""
+class Verbal:
+    """API models that expose no token logprobs (the Claude Messages API has none): the model states a
+    probability for every option through a JSON schema, renormalised to sum to 1.
+
+    This is verbalized confidence, a different measurement from the logprob runners; report it separately.
+    No `fallbacks`: a refusal must not be answered silently by another model, so refused items are dropped
+    and counted instead.
+    """
+
+    def __init__(self, model_id: str = "claude-opus-5-5", effort: str = "low", client=None):
+        if client is None:
+            import anthropic
+
+            client = anthropic.Anthropic()
+        self.client, self.model, self.effort = client, model_id, effort
+        self.manifest = {
+            "runner": "verbal",
+            "model": model_id,
+            "revision": "api",  # hosted models can't be pinned; runs record the date and served model
+            "readout": "probability per option stated through output_config json_schema, renormalised",
+            "effort": effort,
+            "prompt": render("{text}", "{question}", ["{options}"]) + VERBAL_SUFFIX,
+        }
+
+    def _ask(self, text, question, options):
+        schema = {
+            "type": "object",
+            "properties": {o: {"type": "number"} for o in options},
+            "required": list(options),
+            "additionalProperties": False,
+        }
+        r = self.client.messages.create(
+            model=self.model,
+            max_tokens=4096,
+            output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}},
+            messages=[{"role": "user", "content": render(text, question, options) + VERBAL_SUFFIX}],
+        )
+        if r.stop_reason == "refusal":
+            return None
+        if r.stop_reason != "end_turn":
+            raise RuntimeError(f"{self.model} stopped with {r.stop_reason}")
+        self.manifest["served_model"] = r.model
+        stated = json.loads(next(b.text for b in r.content if b.type == "text"))
+        p = [max(float(stated[o]), 0.0) for o in options]
+        return [x / sum(p) for x in p] if sum(p) > 0 else None
+
+    def predict(self, texts, question, options):
+        return [self._ask(t, question, options) for t in texts]
+
+
+VERBAL_SUFFIX = "\n\nFor each option, give the probability that it is the correct answer. The probabilities sum to 1."
+
+PERTURBATIONS = ("order", "edit", "paraphrase")
+
+
+def _variants(ds, df, perturb, n):
+    """(variant name, ids, texts, option order) for one perturbation family; 'orig' when perturb is None."""
+    k = len(ds.options)
+    if perturb is None:
+        yield "orig", df.id.tolist(), df.text.tolist(), list(range(k))
+    elif perturb == "order":
+        for j, order in enumerate(perturb_mod.orders(k, n, ds.source.name)):
+            yield f"order:{j}", df.id.tolist(), df.text.tolist(), order
+    elif ds.source.name in perturb_mod.NO_TEXT_PERTURBATION:
+        raise ValueError(f"{ds.source.name} has no text perturbations: edits would change what is being labeled")
+    elif perturb == "edit":
+        cands = [perturb_mod.edits(t, n, ds.source.name, i) for i, t in zip(df.id, df.text)]
+        for j in range(n):
+            yield f"edit:{j}", df.id.tolist(), [c[j] for c in cands], list(range(k))
+    elif perturb == "paraphrase":
+        para = perturb_mod.paraphrases(ds.source.name)
+        para = para[para.id.isin(df.id) & (para.k < n)]
+        if para.empty:
+            raise ValueError(f"no stored paraphrases for {ds.source.name}; generate them first")
+        for j, g in para.groupby("k"):
+            yield f"paraphrase:{j}", g.id.tolist(), g.text.tolist(), list(range(k))
+    else:
+        raise ValueError(f"unknown perturbation {perturb!r}")
+
+
+def run(runner, dataset: str, split: str = "test", limit: int | None = None, batch_size: int = 8,
+        perturb: str | None = None, n_variants: int = 3):
+    """Predictions for one dataset split: columns dataset, id, variant, probs, latency_ms.
+
+    Probabilities are stored in the dataset's option order, whatever order the model was shown.
+    A runner may return None for an item it refused; those rows are left out and counted in df.attrs.
+    """
     ds = load(dataset)
     df = ds.df[ds.df.split == split].head(limit)
-    probs, latency = [], []
-    for k in range(0, len(df), batch_size):
-        texts = df.text.iloc[k : k + batch_size].tolist()
-        t0 = time.perf_counter()
-        out = runner.predict(texts, ds.source.question, ds.options)
-        # per-decision latency is batch wall time / batch size; p50/p99 of single calls needs batch_size=1
-        latency += [(time.perf_counter() - t0) * 1000 / len(texts)] * len(texts)
-        probs += out
-    _check(probs, df.label.to_numpy())  # every row a valid distribution over this dataset's options
-    return pd.DataFrame({"dataset": dataset, "id": df.id.to_numpy(), "probs": probs, "latency_ms": latency})
+    rows, asked = [], 0
+    for variant, ids, texts, order in _variants(ds, df, perturb, n_variants):
+        asked += len(texts)
+        shown = tuple(ds.options[i] for i in order)
+        for k in range(0, len(texts), batch_size):
+            batch = texts[k : k + batch_size]
+            t0 = time.perf_counter()
+            out = runner.predict(batch, ds.source.question, shown)
+            # per-decision latency is batch wall time / batch size; p50/p99 of single calls needs batch_size=1
+            ms = (time.perf_counter() - t0) * 1000 / len(batch)
+            for i, p in zip(ids[k : k + batch_size], out):
+                if p is not None:
+                    if len(p) != len(order):
+                        raise ValueError(f"runner returned {len(p)} probabilities for {len(order)} options")
+                    canon = [0.0] * len(order)
+                    for pos, opt in enumerate(order):
+                        canon[opt] = p[pos]
+                    rows.append((dataset, i, variant, canon, ms))
+    preds = pd.DataFrame(rows, columns=["dataset", "id", "variant", "probs", "latency_ms"])
+    labels = df.set_index("id").label.loc[preds.id].to_numpy()
+    _check(preds.probs.tolist(), labels)  # every row a valid distribution over this dataset's options
+    preds.attrs["refused"] = asked - len(preds)
+    return preds
 
 
 def write(out_dir: str | Path, preds: pd.DataFrame, manifest: dict, run_info: dict) -> Path:
@@ -186,10 +293,14 @@ def write(out_dir: str | Path, preds: pd.DataFrame, manifest: dict, run_info: di
     if m and (m["runner"], m["model"], m["revision"]) != (manifest["runner"], manifest["model"], manifest["revision"]):
         raise ValueError(f"{out} holds predictions from {m['model']}@{m['revision']}; use another directory")
     (dataset,) = preds.dataset.unique()
+    (family,) = preds.variant.str.split(":").str[0].unique()
     out.mkdir(parents=True, exist_ok=True)
     old = pd.read_parquet(path) if path.exists() else preds.iloc[:0]
-    pd.concat([old[old.dataset != dataset], preds], ignore_index=True).to_parquet(path, index=False)
+    replaced = (old.dataset == dataset) & (old.variant.str.split(":").str[0] == family)
+    pd.concat([old[~replaced], preds], ignore_index=True).to_parquet(path, index=False)
     now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
-    runs = {**m.get("runs", {}), dataset: {**run_info, "n": len(preds), "date": now}}
+    key = dataset if family == "orig" else f"{dataset}/{family}"
+    info = {**run_info, "n": len(preds), "refused": preds.attrs.get("refused", 0), "date": now}
+    runs = {**m.get("runs", {}), key: info}
     mpath.write_text(json.dumps({**m, **manifest, "runs": runs}, indent=2) + "\n")
     return path

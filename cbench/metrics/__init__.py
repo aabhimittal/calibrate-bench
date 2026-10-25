@@ -72,6 +72,19 @@ def aurc(probs, labels) -> float:
     return float(np.sum(np.diff(coverage, prepend=0) * risk))
 
 
+def flips(p, q) -> np.ndarray:
+    """Per row: 1 if the predicted option differs between two distributions over the same options."""
+    p, q = np.asarray(p, dtype=float), np.asarray(q, dtype=float)
+    return (p.argmax(1) != q.argmax(1)).astype(float)
+
+
+def kl(p, q, eps: float = 1e-6) -> np.ndarray:
+    """Per row KL(p || q) in nats; both clipped at eps so a hard zero in q can't make it infinite."""
+    p, q = (np.clip(np.asarray(a, dtype=float), eps, None) for a in (p, q))
+    p, q = p / p.sum(1, keepdims=True), q / q.sum(1, keepdims=True)
+    return (p * np.log(p / q)).sum(1)
+
+
 def bootstrap_ci(
     metric: Callable, probs, labels, n_resamples: int = 1000, alpha: float = 0.05, seed: int = 0
 ) -> tuple[float, float, float]:

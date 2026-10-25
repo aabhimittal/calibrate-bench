@@ -125,3 +125,14 @@ def test_one_hot_soft_targets_equal_hard_labels():
 def test_rejects_malformed_predictions(probs, labels):
     with pytest.raises(ValueError):
         brier(probs, labels)
+
+
+def test_flips_and_kl_hand_computed():
+    from cbench.metrics import flips, kl
+
+    p = np.array([[0.5, 0.5], [0.9, 0.1], [0.2, 0.8]])
+    q = np.array([[0.5, 0.5], [0.4, 0.6], [0.2, 0.8]])
+    np.testing.assert_array_equal(flips(p, q), [0, 1, 0])  # tie -> lowest index on both sides, no flip
+    # row 1: .9 ln(.9/.4) + .1 ln(.1/.6) = 0.72982 - 0.17918 = 0.55065 ; identical rows -> 0
+    np.testing.assert_allclose(kl(p, q), [0, 0.9 * np.log(0.9 / 0.4) + 0.1 * np.log(0.1 / 0.6), 0], atol=1e-6)
+    assert np.isfinite(kl([[1.0, 0.0]], [[0.0, 1.0]])).all()  # hard zeros are clipped, not infinite

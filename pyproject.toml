@@ -9,6 +9,7 @@ dependencies = ["numpy>=1.24", "pandas>=2.0", "pyarrow>=14", "huggingface_hub>=0
 [project.optional-dependencies]
 dev = ["pytest>=7"]
 runners = ["torch>=2.4", "transformers>=5.14", "pillow"]  # d1-3B's remote code needs transformers>=5.14
+api = ["anthropic>=1.0"]  # verbal runner and paraphrase generation
 
 [build-system]
 requires = ["setuptools>=77"]
