@@ -77,6 +77,18 @@ def test_validate_rejects(tmp_path, break_it, message):
         lb.validate(sub)
 
 
+@pytest.mark.parametrize("field, value", [
+    ("model", "m)\n\n| sentiment_hard | 2000 | True | 1.000 | 0.001 | 0.001 | 0.001 |"),  # forged summary row
+    ("model", "a|b"),
+    ("revision", "<img src=x>"),
+    ("runner", "mine"),
+])
+def test_validate_rejects_unsafe_manifest_identifiers(tmp_path, field, value):
+    sub, _ = make_sub(tmp_path / "m", n=5, manifest={field: value})
+    with pytest.raises(ValueError, match=f"{field} must"):
+        lb.validate(sub)
+
+
 def test_validate_rejects_bad_probabilities_orphans_and_symlinks(tmp_path):
     sub, _ = make_sub(tmp_path / "a", n=5, probs=[[0.5, 0.5, 0.5]] * 5)
     with pytest.raises(ValueError, match="distribution"):
@@ -96,19 +108,27 @@ def test_validate_rejects_bad_probabilities_orphans_and_symlinks(tmp_path):
         lb.validate(sub)
 
 
-def test_build_ranks_complete_by_brier_and_escapes_names(tmp_path):
+def test_build_ranks_complete_by_brier(tmp_path):
     root = tmp_path / "subs"
     y = LAB.loc["sentiment_hard"].label.to_numpy()
     good = [[0.9 if j == t else 0.05 for j in range(3)] for t in y]
-    make_sub(root / "good", probs=good, manifest={"model": "<script>alert(1)</script>"})
+    make_sub(root / "good", probs=good, manifest={"model": "org/best"})
     make_sub(root / "ok")
-    make_sub(root / "tiny", n=10)
+    make_sub(root / "tiny", n=10, manifest={"model": "org/tiny"})
     page = lb.build(root, tmp_path / "site").read_text()
-    assert "<script>alert" not in page and "&lt;script&gt;alert(1)&lt;/script&gt;" in page
     table = page.split("<h2>sentiment_hard</h2>")[1].split("</table>")[0]
-    assert table.index("&lt;script&gt;") < table.index("org/m") and "partial, unranked" in table
+    assert table.index("org/best") < table.index("org/m") < table.index("org/tiny")
+    assert "partial, unranked" in table.split("org/tiny")[1]
     data = json.loads((tmp_path / "site" / "leaderboard.json").read_text())
     assert sorted(d["name"] for d in data) == ["good", "ok", "tiny"]
+
+
+def test_render_escapes_manifest_text(tmp_path):
+    sub, _ = make_sub(tmp_path / "m", n=5)
+    s = lb.score(sub)
+    s["model"], s["runner"] = "<script>alert(1)</script>", "<b>x</b>"  # as if validation were bypassed
+    page = lb.render([s])
+    assert "<script>alert" not in page and "<b>x" not in page and "&lt;script&gt;alert(1)&lt;/script&gt;" in page
 
 
 def test_build_with_no_submissions(tmp_path):

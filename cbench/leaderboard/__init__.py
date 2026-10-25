@@ -22,6 +22,8 @@ from cbench.metrics import _check, aurc, bootstrap_ci, brier, ece
 LABELS = Path(__file__).parent / "labels.parquet"
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 VARIANT = re.compile(r"orig|(order|edit|paraphrase):\d{1,3}")
+IDENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,127}")  # model ids, commit shas, "api"
+RUNNERS = {"d1", "logprob", "verbal"}
 MAX_BYTES = 64 * 1024 * 1024
 FILES = {"predictions.parquet", "manifest.json"}
 
@@ -78,6 +80,12 @@ def validate(sub: Path) -> tuple[dict, pd.DataFrame]:
     for key in ("runner", "model", "revision", "readout", "runs"):
         if not m.get(key):
             problems.append(f"manifest.json has no {key!r}")
+    # These end up in the CI summary (Markdown) and on the page: a newline or "|" could forge score rows
+    if m.get("runner") not in RUNNERS:
+        problems.append(f"manifest.json runner must be one of {sorted(RUNNERS)}")
+    for key in ("model", "revision"):
+        if not IDENT.fullmatch(str(m.get(key, ""))):
+            problems.append(f"manifest.json {key} must match {IDENT.pattern}")
     preds = pd.read_parquet(sub / "predictions.parquet")
     want = ["dataset", "id", "variant", "probs", "latency_ms"]
     if list(preds.columns) != want:
