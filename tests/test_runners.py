@@ -124,3 +124,85 @@ def test_logprob_scores_equal_brute_force_sequence_logprob():
         assert g == pytest.approx(want, abs=1e-4), o
     probs = llm.predict(["some text"], "Pick one.", options)[0]
     assert sum(probs) == pytest.approx(1) and np.argmax(probs) == np.argmax(got)
+
+
+class FirstShown:
+    """Puts 0.7 on whichever option is shown first: maximally order-sensitive."""
+    manifest = Fake.manifest
+
+    def predict(self, texts, question, options):
+        rest = 0.3 / (len(options) - 1)
+        return [[0.7] + [rest] * (len(options) - 1) for _ in texts]
+
+
+def test_order_variants_are_stored_in_canonical_option_order():
+    preds = run(FirstShown(), "sentiment_hard", perturb="order", n_variants=2)
+    orders = runners.perturb_mod.orders(3, 2, "sentiment_hard")
+    assert sorted(preds.variant.unique()) == ["order:0", "order:1"]
+    for j, order in enumerate(orders):
+        p = np.stack(preds[preds.variant == f"order:{j}"].probs.to_numpy())
+        assert (p.argmax(1) == order[0]).all()  # the option shown first, in canonical index
+    report = runners.perturb_mod.report(pd.concat([run(FirstShown(), "sentiment_hard"), preds]))
+    assert report.flip_rate.item() == 1.0 and report.any_flip.item() == 1.0
+
+
+def test_text_perturbations(monkeypatch):
+    seen = []
+
+    class Echo(Fake):
+        def predict(self, texts, question, options):
+            seen.extend(texts)
+            return super().predict(texts, question, options)
+
+    preds = run(Echo(), "sentiment_hard", perturb="edit", n_variants=2)
+    assert len(preds) == 10 and set(preds.variant) == {"edit:0", "edit:1"} and seen != ["t2"] * 10
+    with pytest.raises(ValueError, match="no text perturbations"):
+        run(Echo(), "code_review_risk", perturb="edit")
+    para = pd.DataFrame({"id": ["id2", "id3", "id2"], "k": [0, 0, 1], "text": ["p", "q", "r"]})
+    monkeypatch.setattr(runners.perturb_mod, "paraphrases", lambda name: para)
+    preds = run(Echo(), "sentiment_hard", perturb="paraphrase", n_variants=1)
+    assert preds[["id", "variant"]].values.tolist() == [["id2", "paraphrase:0"], ["id3", "paraphrase:0"]]
+
+
+def test_write_keeps_each_perturbation_family_separate(tmp_path):
+    info = {"split": "test", "limit": None, "batch_size": 8}
+    write(tmp_path, run(Fake(), "sentiment_hard"), Fake.manifest, info)
+    write(tmp_path, run(Fake(), "sentiment_hard", perturb="order", n_variants=2), Fake.manifest, info)
+    write(tmp_path, run(Fake(), "sentiment_hard", perturb="order", n_variants=1), Fake.manifest, info)
+    df = pd.read_parquet(tmp_path / "predictions.parquet")
+    assert df.groupby("variant").size().to_dict() == {"orig": 5, "order:0": 5}
+    assert set(json.loads((tmp_path / "manifest.json").read_text())["runs"]) == {"sentiment_hard", "sentiment_hard/order"}
+
+
+def _reply(stop="end_turn", stated=None):
+    from types import SimpleNamespace
+
+    text = json.dumps(stated or {})
+    return SimpleNamespace(stop_reason=stop, model="claude-served", content=[SimpleNamespace(type="thinking"),
+                                                                              SimpleNamespace(type="text", text=text)])
+
+
+def test_verbal_renormalises_and_drops_refusals():
+    replies = iter([_reply(stated={"negative": 2, "neutral": 1, "positive": 1}), _reply("refusal")] + [
+        _reply(stated={"negative": 0.1, "neutral": 0.1, "positive": 0.8})] * 3)
+
+    class Client:
+        def __init__(self):
+            self.messages, self.calls = self, []
+
+        def create(self, **kw):
+            self.calls.append(kw)
+            return next(replies)
+
+    client = Client()
+    v = runners.Verbal("claude-opus-5-5", client=client)
+    preds = run(v, "sentiment_hard")
+    assert len(preds) == 4 and preds.attrs["refused"] == 1
+    np.testing.assert_allclose(preds.probs.iloc[0], [0.5, 0.25, 0.25])
+    schema = client.calls[0]["output_config"]["format"]["schema"]
+    assert schema["required"] == list(OPTIONS) and schema["additionalProperties"] is False
+    assert "fallbacks" not in client.calls[0] and v.manifest["served_model"] == "claude-served"
+
+    client.create = lambda **kw: _reply("max_tokens")
+    with pytest.raises(RuntimeError, match="max_tokens"):
+        run(v, "sentiment_hard")
