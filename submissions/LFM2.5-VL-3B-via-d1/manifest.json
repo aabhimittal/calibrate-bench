@@ -1,0 +1,41 @@
+{
+  "runner": "d1",
+  "model": "LiquidAI/LFM2.5-VL-3B",
+  "revision": "35a118d938ce6d123ac2d371649f24a8efb69058",
+  "readout": "System One choice question, option codes scored at one slot, calibration=None (vendor default); code from LiquidAI/d1-3B@051bcc464b01b9f92942b364d9586b0ef5912432",
+  "device": "cpu",
+  "dtype": "float32",
+  "torch": "2.14.1+cpu",
+  "transformers": "5.20.2",
+  "machine": "Linux x86_64",
+  "gpu": null,
+  "runs": {
+    "sentiment_hard": {
+      "split": "test",
+      "limit": 400,
+      "batch_size": 8,
+      "variants": null,
+      "n": 400,
+      "refused": 0,
+      "date": "2026-10-26T12:18:53+00:00"
+    },
+    "toxicity": {
+      "split": "test",
+      "limit": 150,
+      "batch_size": 1,
+      "variants": null,
+      "n": 150,
+      "refused": 0,
+      "date": "2026-10-26T12:49:28+00:00"
+    },
+    "sentiment_hard/order": {
+      "split": "test",
+      "limit": 400,
+      "batch_size": 8,
+      "variants": 2,
+      "n": 800,
+      "refused": 0,
+      "date": "2026-10-26T14:06:08+00:00"
+    }
+  }
+}
