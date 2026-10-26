@@ -59,17 +59,22 @@ class D1:
 
         device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         dtype = torch.float32 if device == "cpu" else torch.bfloat16  # vendor's recommendation
-        model = AutoModel.from_pretrained(_snapshot(model_id, revision), trust_remote_code=True, dtype=dtype)
+        path = Path(_snapshot(model_id, revision))
         if weights:
-            from safetensors import safe_open
+            import tempfile
 
+            # d1's config, code and tokenizer with the other checkpoint's weights, loaded by transformers itself so
+            # its key renames and tied weights apply exactly as for d1
             repo, _, rev = weights.partition("@")
-            params = model.state_dict()
-            with safe_open(Path(_snapshot(repo, rev)) / "model.safetensors", "pt") as f, torch.no_grad():
-                if set(f.keys()) != set(params):
-                    raise ValueError(f"{repo} does not have {model_id}'s parameters")
-                for k in f.keys():  # one tensor at a time: two full copies don't fit in CPU memory
-                    params[k].copy_(f.get_tensor(k))
+            mixed = Path(tempfile.mkdtemp(prefix="cbench-weights-"))
+            for f in path.iterdir():
+                if f.name != "model.safetensors":
+                    (mixed / f.name).symlink_to(f)
+            (mixed / "model.safetensors").symlink_to(Path(_snapshot(repo, rev)) / "model.safetensors")
+            path = mixed
+        model, info = AutoModel.from_pretrained(path, trust_remote_code=True, dtype=dtype, output_loading_info=True)
+        if info["missing_keys"] or info["unexpected_keys"]:  # transformers would fill missing ones with random values
+            raise ValueError(f"checkpoint does not match {model_id}: {info}")
         self.engine = model.to(device).engine
         self.manifest = {
             "runner": "d1",
