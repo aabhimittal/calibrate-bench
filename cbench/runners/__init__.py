@@ -81,12 +81,18 @@ class D1:
         }
 
     def predict(self, texts, question, options):
-        q = {"type": "choice", "instructions": question, "criteria": {o: o.replace("_", " ") for o in options}}
+        q = {"type": "choice", "instructions": question, "criteria": {o: label(o) for o in options}}
         return [per_q[0] for per_q in self.engine.probabilities_batch([(t, [q]) for t in texts])]  # one question each
 
 
+def label(option: str) -> str:
+    """How every runner shows an option to a model: dataset ids like non_toxic read as words (non toxic)."""
+    return option.replace("_", " ")
+
+
 def render(text: str, question: str, options) -> str:
-    return f"{question}\n\nText:\n{text}\n\nOptions: {', '.join(options)}\n\nAnswer with exactly one option."
+    shown = ", ".join(label(o) for o in options)
+    return f"{question}\n\nText:\n{text}\n\nOptions: {shown}\n\nAnswer with exactly one option."
 
 
 def end_of_turn(tok, fallback: int | list[int]) -> int:
@@ -148,7 +154,7 @@ class LogprobLLM:
 
         prompt = self._prompt_ids(text, question, options)
         lead = "" if self.tok.chat_template else " "
-        conts = [self.tok(lead + o, add_special_tokens=False).input_ids + [self.eos] for o in options]
+        conts = [self.tok(lead + label(o), add_special_tokens=False).input_ids + [self.eos] for o in options]
         b = min(self.option_batch, len(options))
         # The prompt (minus its last token) is encoded once, already batched b-wide: hybrid caches (e.g. Qwen3.5's
         # linear-attention layers) can't be batch-repeated later, but every cache type can be deep-copied.
@@ -210,8 +216,8 @@ class Verbal:
     def _ask(self, text, question, options):
         schema = {
             "type": "object",
-            "properties": {o: {"type": "number"} for o in options},
-            "required": list(options),
+            "properties": {label(o): {"type": "number"} for o in options},
+            "required": [label(o) for o in options],
             "additionalProperties": False,
         }
         r = self.client.messages.create(
@@ -226,7 +232,7 @@ class Verbal:
             raise RuntimeError(f"{self.model} stopped with {r.stop_reason}")
         self.manifest["served_model"] = r.model
         stated = json.loads(next(b.text for b in r.content if b.type == "text"))
-        p = [max(float(stated[o]), 0.0) for o in options]
+        p = [max(float(stated[label(o)]), 0.0) for o in options]
         return [x / sum(p) for x in p] if sum(p) > 0 else None
 
     def predict(self, texts, question, options):

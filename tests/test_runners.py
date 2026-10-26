@@ -116,7 +116,7 @@ def test_logprob_scores_equal_brute_force_sequence_logprob():
     got = llm.option_logprobs("some text", "Pick one.", options)
     prompt = llm._prompt_ids("some text", "Pick one.", options)
     for o, g in zip(options, got):
-        cont = llm.tok(" " + o, add_special_tokens=False).input_ids + [llm.eos]
+        cont = llm.tok(" " + runners.label(o), add_special_tokens=False).input_ids + [llm.eos]
         ids = torch.tensor([prompt + cont])
         with torch.no_grad():
             lp = llm.model(input_ids=ids).logits[0].float().log_softmax(-1)
