@@ -1,0 +1,31 @@
+name: submission
+# A submission PR adds or updates submissions/<name>/{predictions.parquet,manifest.json} and nothing else.
+# No code from the PR runs: the guard and the scorer are installed from the base commit, and the PR checkout
+# is only read as data. Commands run from the workspace root so `python -m cbench` can't pick up pr/cbench.
+on:
+  pull_request:
+    paths: ["submissions/**"]
+permissions:
+  contents: read
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+      - uses: actions/checkout@v4
+        with:
+          path: pr
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ./base
+      - name: Only one submission changed, and nothing else
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: git -C pr diff -z --no-renames --name-only "$BASE"...HEAD | python -m cbench.leaderboard guard > name.txt
+      - name: Validate and score
+        run: python -m cbench.leaderboard check "pr/submissions/$(cat name.txt)" >> "$GITHUB_STEP_SUMMARY"
