@@ -16,6 +16,7 @@ p.add_argument("--perturb", choices=PERTURBATIONS, help="run one perturbation fa
 p.add_argument("--variants", type=int, default=3, help="orders / edits / paraphrases per item")
 p.add_argument("--device")
 p.add_argument("--effort", default="low", help="verbal only")
+p.add_argument("--weights", help="d1 only: REPO@SHA of a same-architecture checkpoint to run through d1's readout")
 p.add_argument("--out", help="default: submissions/<model name>")
 a = p.parse_args()
 
@@ -23,7 +24,8 @@ if a.runner == "verbal":
     runner, datasets = Verbal(a.model, a.effort), a.args
 else:
     revision, *datasets = a.args
-    runner = (D1 if a.runner == "d1" else LogprobLLM)(a.model, revision, device=a.device)
+    runner = (D1(a.model, revision, a.device, a.weights) if a.runner == "d1"
+              else LogprobLLM(a.model, revision, device=a.device))
 if unknown := set(datasets) - set(SOURCES):
     p.error(f"unknown datasets {sorted(unknown)}; choose from {list(SOURCES)}")
 out = a.out or f"submissions/{a.model.split('/')[-1]}"

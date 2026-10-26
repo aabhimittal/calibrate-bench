@@ -51,20 +51,32 @@ def _env(device, dtype) -> dict:
 class D1:
     """Liquid AI d1 models via their own System One readout (one `choice` question, plain softmax)."""
 
-    def __init__(self, model_id: str, revision: str, device: str | None = None):
+    def __init__(self, model_id: str, revision: str, device: str | None = None, weights: str | None = None):
+        """weights="REPO@SHA" runs another checkpoint of the same architecture through d1's readout, e.g. d1's
+        base model, so the only difference from d1 is the decision training."""
         import torch
         from transformers import AutoModel
 
         device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         dtype = torch.float32 if device == "cpu" else torch.bfloat16  # vendor's recommendation
         model = AutoModel.from_pretrained(_snapshot(model_id, revision), trust_remote_code=True, dtype=dtype)
+        if weights:
+            from safetensors import safe_open
+
+            repo, _, rev = weights.partition("@")
+            params = model.state_dict()
+            with safe_open(Path(_snapshot(repo, rev)) / "model.safetensors", "pt") as f, torch.no_grad():
+                if set(f.keys()) != set(params):
+                    raise ValueError(f"{repo} does not have {model_id}'s parameters")
+                for k in f.keys():  # one tensor at a time: two full copies don't fit in CPU memory
+                    params[k].copy_(f.get_tensor(k))
         self.engine = model.to(device).engine
         self.manifest = {
             "runner": "d1",
-            "model": model_id,
-            "revision": revision,
+            "model": repo if weights else model_id,
+            "revision": rev if weights else revision,
             "readout": "System One choice question, option codes scored at one slot, "
-            "calibration=None (vendor default)",
+            "calibration=None (vendor default)" + (f"; code from {model_id}@{revision}" if weights else ""),
             **_env(device, dtype),
         }
 
