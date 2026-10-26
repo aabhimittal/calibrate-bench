@@ -22,11 +22,13 @@ def orig(sub: Path) -> pd.DataFrame:
 
 
 def base_rate(ds: str, ids) -> np.ndarray:
-    """Predict every item with the class frequencies of the items scored: calibrated by construction, useless."""
-    y = LAB.loc[ds].loc[ids].label.to_numpy()
-    k = int(LAB.loc[ds].label.max()) + 1
-    freq = np.bincount(y, minlength=k) / len(y)
-    return np.tile(freq, (len(y), 1))
+    """Predict every item with the full test split's class frequencies: a prior a deployer would know, no model.
+
+    Frequencies of the scored sample itself would leak its labels into the baseline.
+    """
+    full = LAB.loc[ds].label.to_numpy()
+    freq = np.bincount(full, minlength=full.max() + 1) / len(full)
+    return np.tile(freq, (len(ids), 1))
 
 
 def selective_accuracy(p, y, coverage) -> float:
@@ -77,6 +79,12 @@ def main(subs: list[Path]):
     names = list(scored)
     for ds in datasets:
         have = [n for n in names if ds in scored[n]["datasets"]]
+        for a in have:  # every model against the base-rate predictor on its own items
+            o = orig(subs[names.index(a)])
+            o = o[o.dataset == ds]
+            p, y = np.stack(o.probs.to_numpy()), LAB.loc[ds].loc[o.id].label.to_numpy()
+            m, lo, hi = paired_brier_diff(p, base_rate(ds, o.id), y)
+            print(f"- {ds}: {a} − base rate = {m:+.3f} [{lo:+.3f}, {hi:+.3f}] over {len(y)} items")
         for i, a in enumerate(have):
             for bname in have[i + 1:]:
                 oa, ob = (orig(subs[names.index(n)]) for n in (a, bname))
