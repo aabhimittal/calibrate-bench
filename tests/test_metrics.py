@@ -136,3 +136,29 @@ def test_flips_and_kl_hand_computed():
     # row 1: .9 ln(.9/.4) + .1 ln(.1/.6) = 0.72982 - 0.17918 = 0.55065 ; identical rows -> 0
     np.testing.assert_allclose(kl(p, q), [0, 0.9 * np.log(0.9 / 0.4) + 0.1 * np.log(0.1 / 0.6), 0], atol=1e-6)
     assert np.isfinite(kl([[1.0, 0.0]], [[0.0, 1.0]])).all()  # hard zeros are clipped, not infinite
+
+
+def test_reliability_hand_computed():
+    from cbench.metrics import reliability
+
+    # same toy as ECE: bins {.55,.60,.65} and {.70,.80,.90}, each 2/3 correct
+    conf, acc, size = reliability(PROBS, LABELS, n_bins=2)
+    np.testing.assert_allclose(conf, [0.6, 0.8])
+    np.testing.assert_allclose(acc, [2 / 3, 2 / 3])
+    np.testing.assert_array_equal(size, [3, 3])
+
+
+def test_ece_keeps_ties_together():
+    # constant predictor at the base rate: perfectly calibrated, so ECE must be 0 for any bin count / input order
+    labels = np.array([0] * 6 + [1] * 4)
+    probs = np.tile([0.6, 0.4], (10, 1))
+    for n_bins in (1, 3, 15):
+        assert ece(probs, labels, n_bins=n_bins) == pytest.approx(0.0)
+        assert ece(probs[::-1], labels[::-1], n_bins=n_bins) == pytest.approx(0.0)
+    # two tie groups, 2 bins: sorted ascending, the .6 group starts at rank 0 (bin 0*2//10 = 0) and the .9 group
+    # at rank 6 (bin 6*2//10 = 1), so each group is exactly one bin whatever the input order
+    p = np.array([[0.9, 0.1]] * 4 + [[0.6, 0.4]] * 6)
+    y = np.array([0, 0, 0, 1] + [0, 0, 0, 1, 1, 1])
+    # .6 group: acc 3/6 = .5 -> gap .1 ; .9 group: acc .75 -> gap .15 ; ECE = .6*.1 + .4*.15 = .12
+    assert ece(p, y, n_bins=2) == pytest.approx(0.12)
+    assert ece(p[::-1], y[::-1], n_bins=2) == pytest.approx(0.12)
