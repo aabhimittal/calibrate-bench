@@ -209,6 +209,7 @@ class Verbal:
 
             client = anthropic.Anthropic()
         self.client, self.model, self.effort = client, model_id, effort
+        self.usage = {"input_tokens": 0, "output_tokens": 0}  # billed tokens, for $ per 1k decisions
         self.manifest = {
             "runner": "verbal",
             "model": model_id,
@@ -231,6 +232,7 @@ class Verbal:
             output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}},
             messages=[{"role": "user", "content": render(text, question, options) + VERBAL_SUFFIX}],
         )
+        self.usage = {k: v + getattr(r.usage, k) for k, v in self.usage.items()}
         if r.stop_reason == "refusal":
             return None
         if r.stop_reason != "end_turn":
@@ -284,6 +286,7 @@ def run(runner, dataset: str, split: str = "test", limit: int | None = None, bat
     ds = load(dataset)
     df = ds.df[ds.df.split == split].head(limit)
     rows, asked = [], 0
+    usage = dict(getattr(runner, "usage", {}))
     for variant, ids, texts, order in _variants(ds, df, perturb, n_variants):
         asked += len(texts)
         shown = tuple(ds.options[i] for i in order)
@@ -305,6 +308,8 @@ def run(runner, dataset: str, split: str = "test", limit: int | None = None, bat
     labels = df.set_index("id").label.loc[preds.id].to_numpy()
     _check(preds.probs.tolist(), labels)  # every row a valid distribution over this dataset's options
     preds.attrs["refused"] = asked - len(preds)
+    if usage:
+        preds.attrs["usage"] = {k: runner.usage[k] - v for k, v in usage.items()}
     return preds
 
 
@@ -324,6 +329,8 @@ def write(out_dir: str | Path, preds: pd.DataFrame, manifest: dict, run_info: di
     now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
     key = dataset if family == "orig" else f"{dataset}/{family}"
     info = {**run_info, "n": len(preds), "refused": preds.attrs.get("refused", 0), "date": now}
+    if "usage" in preds.attrs:
+        info["usage"] = preds.attrs["usage"]
     runs = {**m.get("runs", {}), key: info}
     mpath.write_text(json.dumps({**m, **manifest, "runs": runs}, indent=2) + "\n")
     return path

@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from cbench.datasets import SOURCES
-from cbench.metrics import _check, aurc, bootstrap_ci, brier, ece
+from cbench.metrics import _check, aurc, bootstrap_ci, brier, ece, reliability
 
 LABELS = Path(__file__).parent / "labels.parquet"
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
@@ -86,6 +86,12 @@ def validate(sub: Path) -> tuple[dict, pd.DataFrame]:
     for key in ("model", "revision"):
         if not IDENT.fullmatch(str(m.get(key, ""))):
             problems.append(f"manifest.json {key} must match {IDENT.pattern}")
+    price = [m.get("usd_per_hour")] if "usd_per_hour" in m else []
+    if "usd_per_mtok" in m:
+        mtok = m["usd_per_mtok"]
+        price += [mtok.get("input"), mtok.get("output")] if isinstance(mtok, dict) else [None]
+    if any(type(x) not in (int, float) or not 0 <= x < 1e6 for x in price):
+        problems.append("manifest.json usd_per_hour / usd_per_mtok {input, output} must be non-negative numbers")
     preds = pd.read_parquet(sub / "predictions.parquet")
     want = ["dataset", "id", "variant", "probs", "latency_ms"]
     if list(preds.columns) != want:
@@ -109,6 +115,11 @@ def validate(sub: Path) -> tuple[dict, pd.DataFrame]:
             problems.append(f"{ds}: perturbed items without an orig prediction, e.g. {orphans}")
         if ds not in m.get("runs", {}):
             problems.append(f"{ds}: manifest.json has no runs entry")
+        elif "usage" in m["runs"][ds]:
+            u = m["runs"][ds]["usage"]
+            if not isinstance(u, dict) or any(type(u.get(k)) is not int or u[k] < 0
+                                              for k in ("input_tokens", "output_tokens")):
+                problems.append(f"{ds}: runs usage must hold non-negative integer input_tokens and output_tokens")
     if problems:
         raise ValueError("\n".join(problems))
     return m, preds
@@ -120,7 +131,7 @@ def score(sub: Path) -> dict:
 
     m, preds = validate(sub)
     lab = labels()
-    result = {k: m.get(k) for k in ("runner", "model", "revision", "readout", "served_model", "effort", "device")}
+    result = {k: m.get(k) for k in ("runner", "model", "revision", "readout", "served_model", "effort", "device", "gpu")}
     result |= {"name": sub.name, "datasets": {}}
     consistency = report(preds)
     for ds, g in preds[preds.variant == "orig"].groupby("dataset"):
@@ -132,9 +143,13 @@ def score(sub: Path) -> dict:
             "complete": len(g) == len(lab.loc[ds]),
             "accuracy": float((p.argmax(1) == y).mean()),
             **{f.__name__: bootstrap_ci(f, p, y) for f in (ece, brier, aurc)},
+            "reliability": dict(zip(("conf", "acc", "size"), (v.tolist() for v in reliability(p, y, n_bins=10)))),
             "batch_size": run.get("batch_size"),
-            "latency_ms_p50": float(np.percentile(g.latency_ms, 50)),
-            "latency_ms_p99": float(np.percentile(g.latency_ms, 99)),
+            # items in a batch share one timing (wall time / batch size), so percentiles only mean something at batch 1
+            "latency_ms_mean": float(g.latency_ms.mean()),
+            **({"latency_ms_p50": float(np.percentile(g.latency_ms, 50)),
+                "latency_ms_p99": float(np.percentile(g.latency_ms, 99))} if run.get("batch_size") == 1 else {}),
+            "usd_per_1k": usd_per_1k(m, run, g.latency_ms.mean()),
             "date": run.get("date"),
         }
         if truth.soft.notna().all():
@@ -145,6 +160,20 @@ def score(sub: Path) -> dict:
                                              "items": int(r["items"])} for _, r in rows.iterrows()}
         result["datasets"][ds] = entry
     return result
+
+
+def usd_per_1k(m: dict, run: dict, latency_ms: float) -> float | None:
+    """$ per 1000 decisions at the submitter's declared price: hardware time for local models, tokens for APIs.
+
+    Hardware cost uses the amortised per-decision time of the run's own batch size.
+    """
+    if "usd_per_mtok" in m and "usage" in run:
+        asked = run["n"] + run.get("refused", 0)  # refused calls are billed too
+        mtok, u = m["usd_per_mtok"], run["usage"]
+        return (u["input_tokens"] * mtok["input"] + u["output_tokens"] * mtok["output"]) / 1e6 / asked * 1000
+    if "usd_per_hour" in m:
+        return latency_ms / 3.6e6 * m["usd_per_hour"] * 1000
+    return None
 
 
 def build(root: Path, out: Path) -> Path:
@@ -160,6 +189,35 @@ def _ci(v) -> str:
     return f"{v[0]:.3f} <small>[{v[1]:.3f}, {v[2]:.3f}]</small>" if v else "—"
 
 
+def _latency(d) -> str:
+    if "latency_ms_p50" in d:
+        return f"p50 {d['latency_ms_p50']:.0f} / p99 {d['latency_ms_p99']:.0f}"
+    return f"{d['latency_ms_mean']:.0f} <small>(mean, batch {html.escape(str(d['batch_size']))})</small>"
+
+
+def _diagram(name: str, rel: dict) -> str:
+    """Reliability diagram as inline SVG: one dot per equal-mass bin, the diagonal is perfect calibration."""
+    side, pad = 180, 28
+    x = lambda v: pad + v * (side - pad - 8)  # noqa: E731
+    y = lambda v: side - pad - v * (side - pad - 8)  # noqa: E731
+    pts = list(zip(rel["conf"], rel["acc"], rel["size"]))
+    dots = "".join(f'<circle cx="{x(c):.1f}" cy="{y(a):.1f}" r="4"><title>confidence {c:.2f}, accuracy {a:.2f}, '
+                   f'{n} items</title></circle>' for c, a, n in pts)
+    line = " ".join(f"{x(c):.1f},{y(a):.1f}" for c, a, _ in pts)
+    gap = sum(n * abs(c - a) for c, a, n in pts) / sum(n for *_, n in pts)
+    return (f'<figure><svg viewBox="0 0 {side} {side}" width="{side}" height="{side}" role="img" '
+            f'aria-label="Reliability diagram for {name}: mean confidence against accuracy in {len(pts)} '
+            f'equal-mass bins, ECE {gap:.3f}">'
+            f'<rect x="{x(0)}" y="{y(1)}" width="{x(1) - x(0)}" height="{y(0) - y(1)}" class="frame"/>'
+            f'<line x1="{x(0)}" y1="{y(0)}" x2="{x(1)}" y2="{y(1)}" class="ideal"/>'
+            f'<polyline points="{line}" class="series"/>{dots}'
+            f'<text x="{x(0.5)}" y="{side - 6}" text-anchor="middle">confidence</text>'
+            f'<text transform="translate(12 {y(0.5)}) rotate(-90)" text-anchor="middle">accuracy</text>'
+            f'<text x="{x(0)}" y="{y(0) + 13}" text-anchor="middle">0</text>'
+            f'<text x="{x(1)}" y="{y(0) + 13}" text-anchor="middle">1</text>'
+            f'</svg><figcaption>{name}</figcaption></figure>')
+
+
 def render(scored: list[dict]) -> str:
     """Static page: one table per dataset, complete submissions ranked by Brier, partial ones listed after."""
     def e(v) -> str:  # model names and manifest text come from pull requests
@@ -172,7 +230,7 @@ def render(scored: list[dict]) -> str:
         soft = any("soft_ece" in d for _, d in rows)
         head = ["Model", "Readout", "n", "Accuracy", "ECE", "Brier", "AURC"]
         head += ["Soft ECE", "Soft Brier"] if soft else []
-        head += ["Order flips", "Typo any-flip", "Latency p50 (ms)"]
+        head += ["Order flips", "Typo any-flip", "Latency (ms)", "$ / 1k decisions"]
         body = []
         for s, d in rows:
             pert = d["perturbations"]
@@ -187,16 +245,19 @@ def render(scored: list[dict]) -> str:
             cells += [
                 f"{pert['order']['flip_rate']:.3f}" if "order" in pert else "—",
                 f"{pert['edit']['any_flip']:.3f}" if "edit" in pert else "—",
-                f"{d['latency_ms_p50']:.0f} <small>(batch {e(str(d['batch_size']))})</small>",
+                _latency(d) + f"<br><small>{e(s.get('gpu') or s.get('device') or '?')}</small>",
+                f"{d['usd_per_1k']:.4f}" if d.get("usd_per_1k") is not None else "—",
             ]
             body.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
         if not body:
             body = [f'<tr><td colspan="{len(head)}">No submissions yet.</td></tr>']
+        figs = "".join(_diagram(e(s["model"]), d["reliability"]) for s, d in rows)
         sections.append(
             f"<section><h2>{e(ds)}</h2><p class=\"note\">{e(src.task)}. Lower ECE, Brier and AURC are better; "
             f"brackets are 95% bootstrap intervals.</p><div class=\"scroll\"><table aria-label=\"{e(ds)}\"><thead><tr>"
             + "".join(f'<th scope="col">{h}</th>' for h in head)
-            + "</tr></thead><tbody>" + "".join(body) + "</tbody></table></div></section>"
+            + "</tr></thead><tbody>" + "".join(body) + "</tbody></table></div>"
+            + (f'<div class="diagrams">{figs}</div>' if figs else "") + "</section>"
         )
     return PAGE.format(sections="\n".join(sections))
 
@@ -208,8 +269,9 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CALIBRATE-BENCH leaderboard</title>
 <style>
-:root {{ --bg: #fff; --fg: #1a1a1a; --muted: #5c5c5c; --line: #ddd; --head: #f4f4f4; }}
-@media (prefers-color-scheme: dark) {{ :root {{ --bg: #141414; --fg: #eee; --muted: #aaa; --line: #333; --head: #1f1f1f; }} }}
+:root {{ --bg: #fff; --fg: #1a1a1a; --muted: #5c5c5c; --line: #ddd; --head: #f4f4f4; --series: #2a78d6; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --bg: #141414; --fg: #eee; --muted: #aaa; --line: #333; --head: #1f1f1f;
+  --series: #3987e5; }} }}
 body {{ background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; margin: 0 auto;
        max-width: 72rem; padding: 1.5rem 1rem; }}
 small, .note {{ color: var(--muted); }}
@@ -217,6 +279,15 @@ small, .note {{ color: var(--muted); }}
 table {{ border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }}
 th, td {{ border-bottom: 1px solid var(--line); padding: .4rem .6rem; text-align: left; vertical-align: top; }}
 th {{ background: var(--head); }}
+.diagrams {{ display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }}
+figure {{ margin: 0; flex: 0 1 180px; min-width: 140px; }}
+figcaption {{ color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }}
+svg {{ max-width: 100%; height: auto; }}
+svg text {{ fill: var(--muted); font-size: 11px; }}
+svg .frame {{ fill: none; stroke: var(--line); }}
+svg .ideal {{ stroke: var(--muted); stroke-dasharray: 4 4; }}
+svg .series {{ fill: none; stroke: var(--series); stroke-width: 2; }}
+svg circle {{ fill: var(--series); stroke: var(--bg); stroke-width: 2; }}
 </style>
 </head>
 <body>
@@ -225,7 +296,11 @@ th {{ background: var(--head); }}
 submitted probability vectors; see the <a href="leaderboard.json">raw scores</a>.
 Readouts measure different things: <code>d1</code> and <code>logprob</code> use model probabilities,
 <code>verbal</code> uses probabilities the model states. Compare within a readout.
-Soft scores compare against the share of raters picking each option; their floor is the raters' own disagreement.</p>
+Soft scores compare against the share of raters picking each option; their floor is the raters' own disagreement.
+Latency percentiles are shown only for runs at batch size 1; batched runs share one timing per batch, so they show the
+amortised mean. Cost is hardware time (or API tokens) at the price each submitter declares, on the device shown.
+Reliability diagrams: each dot is one tenth of the items by confidence; dots below the dashed diagonal are
+overconfident.</p>
 {sections}
 </body>
 </html>
