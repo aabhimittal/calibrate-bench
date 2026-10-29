@@ -1,0 +1,44 @@
+{
+  "runner": "logprob",
+  "model": "Qwen/Qwen3.5-2B",
+  "revision": "15852e8c16360a2fea060d615a32b45270f8a8fc",
+  "readout": "sum of token logprobs of each option + end-of-turn token after the chat prompt, softmax over options",
+  "prompt": "{question}\n\nText:\n{text}\n\nOptions: {options}\n\nAnswer with exactly one option.",
+  "chat_template": true,
+  "end_token": "<|im_end|>",
+  "device": "cpu",
+  "dtype": "float32",
+  "torch": "2.14.1+cpu",
+  "transformers": "5.20.2",
+  "machine": "Linux x86_64",
+  "gpu": null,
+  "runs": {
+    "sentiment_hard": {
+      "split": "test",
+      "limit": 400,
+      "batch_size": 8,
+      "variants": null,
+      "n": 400,
+      "refused": 0,
+      "date": "2026-10-26T06:57:17+00:00"
+    },
+    "toxicity": {
+      "split": "test",
+      "limit": 150,
+      "batch_size": 8,
+      "variants": null,
+      "n": 150,
+      "refused": 0,
+      "date": "2026-10-26T11:38:15+00:00"
+    },
+    "sentiment_hard/order": {
+      "split": "test",
+      "limit": 400,
+      "batch_size": 8,
+      "variants": 2,
+      "n": 800,
+      "refused": 0,
+      "date": "2026-10-26T10:05:24+00:00"
+    }
+  }
+}
