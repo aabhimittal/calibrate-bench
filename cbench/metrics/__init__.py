@@ -39,12 +39,25 @@ def _confidence(probs, labels):
     return probs.max(1), targets[np.arange(len(probs)), probs.argmax(1)]
 
 
+def reliability(probs, labels, n_bins: int = 15) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Reliability diagram data over equal-mass bins: mean confidence, accuracy and size of each non-empty bin.
+
+    Tied confidences always share a bin (the bin of their group's first rank). Splitting them by input order
+    would bin arbitrary subsets: a constant predictor would get a non-zero ECE from sampling noise alone.
+    """
+    conf, correct = _confidence(probs, labels)
+    order = np.argsort(conf, kind="stable")
+    first = np.searchsorted(conf[order], conf[order], side="left")  # rank where each item's tie group starts
+    which = first * n_bins // len(conf)
+    bins = [order[which == m] for m in range(n_bins) if (which == m).any()]
+    return (np.array([conf[b].mean() for b in bins]), np.array([correct[b].mean() for b in bins]),
+            np.array([len(b) for b in bins]))
+
+
 def ece(probs, labels, n_bins: int = 15) -> float:
     """Expected calibration error with equal-mass bins: sum_m |B_m|/n * |acc(B_m) - conf(B_m)|."""
-    conf, correct = _confidence(probs, labels)
-    # shortcut: equal confidences straddling a bin edge are split by input order; fine unless ties are massive.
-    bins = np.array_split(np.argsort(conf, kind="stable"), n_bins)
-    return float(sum(len(b) / len(conf) * abs(correct[b].mean() - conf[b].mean()) for b in bins if len(b)))
+    conf, acc, size = reliability(probs, labels, n_bins)
+    return float((size / size.sum() * np.abs(acc - conf)).sum())
 
 
 def brier(probs, labels) -> float:
