@@ -79,7 +79,12 @@ if __name__ == "__main__":
     model = cls.from_pretrained(path, dtype=torch.float32, trust_remote_code=a.remote_code).eval()
     res = pd.concat([probe(model, tok, ds, a.limit, a.k) for ds in a.datasets])
     print(f"## {a.model}@{a.revision[:12]}: greedy continuation of the second half, flagged at >= {a.k} tokens\n")
-    print("positive control (MIT license): run %d of %d tokens\n" % verbatim_run(model, tok, CONTROL))
+    run, rest = verbatim_run(model, tok, CONTROL)
+    print(f"positive control (MIT license): run {run} of {rest} tokens")
+    if run < a.k:
+        print("WARNING: the control is not flagged, so this model doesn't reproduce even heavily copied text "
+              "verbatim; a clean result below says nothing about contamination")
+    print()
     print(summary(res).to_string())
     for _, r in res[res.flagged].iterrows():
         print(f"\n- {r.dataset} {r.id[:12]} ({r.run}/{r.rest} tokens): {r.text[:300]!r}")

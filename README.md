@@ -64,7 +64,7 @@ The logprob runner encodes the prompt once per item, batched 16 wide, and deep-c
 
 ## Contamination probe (`cbench.contamination`, SPEC §9)
 
-`python -m cbench.contamination MODEL SHA DATASET...` feeds the first half of each test text and counts how many of the next tokens are the model's top-1 prediction in a row: exactly what greedy decoding would reproduce verbatim. Runs of 8+ tokens are flagged and printed for a person to read. A passage every LM has memorised (the MIT license text) is the positive control. The test is one-sided: flags are strong evidence of memorisation, a clean result is weak evidence of its absence (a model can learn labels without memorising wording, and there is no known-unseen control set).
+`python -m cbench.contamination MODEL SHA DATASET...` feeds the first half of each test text and counts how many of the next tokens are the model's top-1 prediction in a row: exactly what greedy decoding would reproduce verbatim. Runs of 8+ tokens are flagged and printed for a person to read. A passage every LM has memorised (the MIT license text) is the positive control; when a model fails it (LFM2.5-VL-3B and d1-3B do), the probe has no power on that model and says so. The test is one-sided: flags are strong evidence of memorisation, a clean result is weak evidence of its absence (a model can learn labels without memorising wording, and there is no known-unseen control set).
 
 ## Perturbations (`cbench.perturb`, M3)
 
