@@ -5,6 +5,7 @@
 - **d1-3B's calibration claim holds on hard sentiment, and its decision training is what earns it.** Run through the same prompt and readout, d1's own base model has ECE 0.281 and d1 has 0.077. Paired on the same 400 items, d1's Brier score is better by 0.214 (95% CI 0.145–0.278).
 - **The training also removes option-order bias.** Shuffling the options flips 2.9% of d1's answers. It flips 15.9% for the same base model and 16.1% for a general 2B LLM.
 - **On toxicity, calibration is not usefulness.** d1's ECE is a respectable 0.057, but it does not beat a predictor that always outputs the class frequencies (Brier difference +0.074, CI −0.012 to +0.161). It is also less accurate than always answering "non-toxic" (0.880 vs 0.953 on these items). Liquid's reported 93.0 on Civil Comments is 0.55 points above that always-"non-toxic" answer on the full test split.
+- **It also holds on 77-way ticket routing:** ECE 0.055 at 0.890 accuracy, on 100 items.
 - **Both general models are badly overconfident.** When the base model says 97% on sentiment it is right 57% of the time. Under our toxicity question, both flag most benign comments as toxic.
 
 This is a first, small-sample audit run on a 4-core CPU with no GPU. Every number comes from fixed, shared subsets of the test splits, scored by the same code the leaderboard uses. The leaderboard marks these runs partial and unranked. Read the intervals, not the point estimates.
@@ -13,7 +14,7 @@ This is a first, small-sample audit run on a 4-core CPU with no GPU. Every numbe
 
 | # | Claim | Who makes it | Verdict here |
 |---|---|---|---|
-| 1 | d1-3B "returns calibrated, typed answers" | Liquid AI, d1-3B model card | **Supported on sentiment**, and caused by the decision training. **Qualified on toxicity**: calibrated, but not better than knowing the base rate |
+| 1 | d1-3B "returns calibrated, typed answers" | Liquid AI, d1-3B model card | **Supported on sentiment and 77-way ticket routing**, and on sentiment shown to be caused by the decision training. **Qualified on toxicity**: calibrated, but not better than knowing the base rate |
 | 2 | d1-3B scores 93.0 on Civil Comments | d1-3B model card | **Uninformative**: 92.45% of the test split is non-toxic, so accuracy says little. d1 scored 0.880 on our 150 items |
 | 3 | Answers stay put when options are reordered | Implied by "typed, calibrated decisions" | **Supported for d1** (2.9% flips), and caused by the training: the same base model through the same readout flips 15.9% |
 | 4 | d1-3B leads the Decision Index | d1-3B model card ("not a leaderboard submission") | Not tested. The score is self-run; this is a provenance issue only |
@@ -35,7 +36,7 @@ All runs: fp32 on CPU, the dataset's fixed question, and options shown as words 
 The first N items of each test split in the benchmark's hash order, the same items for every model:
 - 400 of `sentiment_hard` (DynaSent, adversarial 3-way sentiment);
 - 150 of `toxicity` (Civil Comments);
-- 100 each of `ticket_triage` (Banking77, 77 options) and `intent_routing` (CLINC150, 151 options), d1 only.
+- 100 of `ticket_triage` (Banking77, 77 options), d1 only. A matching `intent_routing` run (CLINC150, 151 options) was cut short by a machine restart and is not reported.
 
 Every comparison between models is paired on these items, with 95% bootstrap intervals.
 
@@ -62,7 +63,14 @@ Here ECE is expected calibration error and Brier is the Brier score, both 0 at b
 | toxicity | Qwen3.5-2B | 150 | 0.093 | 0.805 [0.757, 0.855] | 1.529 [1.436, 1.613] | 0.780 | 1.397 | 0.080 |
 | toxicity | *base rate* | 150 | 0.953 | 0.029 | 0.091 | | | |
 
-*Ticket triage (77 options) and intent routing (151 options) for d1-3B: run in progress, added in the next commit.*
+**Many-option routing (d1 only).** On 100 Banking77 queries with 77 options, d1-3B is accurate and well calibrated:
+
+| dataset | model | n | accuracy | ECE [95% CI] | Brier [95% CI] | acc @ top 50% |
+|---|---|---:|---:|---:|---:|---:|
+| ticket_triage | **d1-3B** | 100 | 0.890 | **0.055** [0.054, 0.146] | 0.194 [0.110, 0.295] | 1.000 |
+| ticket_triage | *base rate* | 100 | 0.040 | 0.023 | 0.986 | |
+
+Its reliability bins are 0.62→0.70, 0.85→0.80, 0.95→0.95, 0.97→1.00, 0.98→1.00, and the paired Brier gain over the base rate is 0.793 [0.697, 0.877]. There is no general-model comparison here: the logprob runner scores every option separately, which takes minutes per item on CPU at 77 options.
 
 ### Paired Brier differences (same items; negative means the first is better)
 
