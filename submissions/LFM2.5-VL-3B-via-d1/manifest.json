@@ -37,5 +37,7 @@
       "refused": 0,
       "date": "2026-10-26T14:06:08+00:00"
     }
-  }
+  },
+  "usd_per_hour": 0.1785,
+  "price_basis": "AWS c7i.xlarge on-demand, us-east-1 (4 vCPU), per third-party price trackers in Oct 2026; the run used a comparable 4-core x86 KVM machine"
 }
