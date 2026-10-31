@@ -17,11 +17,11 @@ import numpy as np
 import pandas as pd
 
 from cbench.datasets import SOURCES
-from cbench.metrics import _check, aurc, bootstrap_ci, brier, ece, reliability
+from cbench.metrics import _check, aurc, bootstrap_ci, brier, ece, reliability, risk_coverage
 
 LABELS = Path(__file__).parent / "labels.parquet"
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-VARIANT = re.compile(r"orig|(order|edit|paraphrase):\d{1,3}")
+VARIANT = re.compile(r"orig|(order|edit|attack|paraphrase):\d{1,3}")
 IDENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,127}")  # model ids, commit shas, "api"
 RUNNERS = {"d1", "logprob", "verbal"}
 MAX_BYTES = 64 * 1024 * 1024
@@ -144,6 +144,7 @@ def score(sub: Path) -> dict:
             "accuracy": float((p.argmax(1) == y).mean()),
             **{f.__name__: bootstrap_ci(f, p, y) for f in (ece, brier, aurc)},
             "reliability": dict(zip(("conf", "acc", "size"), (v.tolist() for v in reliability(p, y, n_bins=10)))),
+            "risk_coverage": _sampled(*risk_coverage(p, y)),
             "batch_size": run.get("batch_size"),
             # items in a batch share one timing (wall time / batch size), so percentiles only mean something at batch 1
             "latency_ms_mean": float(g.latency_ms.mean()),
@@ -160,6 +161,12 @@ def score(sub: Path) -> dict:
                                              "items": int(r["items"])} for _, r in rows.iterrows()}
         result["datasets"][ds] = entry
     return result
+
+
+def _sampled(coverage, risk, points: int = 20) -> dict:
+    """The risk-coverage curve at about `points` evenly spaced coverages, enough to draw it."""
+    idx = np.unique(np.searchsorted(coverage, np.linspace(0, 1, points + 1)[1:] - 1e-9).clip(0, len(coverage) - 1))
+    return {"coverage": coverage[idx].tolist(), "risk": risk[idx].tolist()}
 
 
 def usd_per_1k(m: dict, run: dict, latency_ms: float) -> float | None:
@@ -218,6 +225,31 @@ def _diagram(name: str, rel: dict) -> str:
             f'</svg><figcaption>{name}</figcaption></figure>')
 
 
+def _curve(name: str, rc: dict) -> str:
+    """Risk-coverage curve as inline SVG: error rate among the most confident share of items. The dashed line is the
+    overall error rate, what accepting items at random would give at every coverage."""
+    side, pad = 180, 28
+    top = max(0.05, float(np.ceil(max(rc["risk"]) * 10) / 10))
+    x = lambda v: pad + v * (side - pad - 8)  # noqa: E731
+    y = lambda v: side - pad - v / top * (side - pad - 8)  # noqa: E731
+    line = " ".join(f"{x(c):.1f},{y(r):.1f}" for c, r in zip(rc["coverage"], rc["risk"]))
+    dots = "".join(f'<circle cx="{x(c):.1f}" cy="{y(r):.1f}" r="3"><title>top {c:.0%} by confidence: error rate '
+                   f'{r:.3f}</title></circle>' for c, r in zip(rc["coverage"], rc["risk"]))
+    full = rc["risk"][-1]
+    return (f'<figure><svg viewBox="0 0 {side} {side}" width="{side}" height="{side}" role="img" '
+            f'aria-label="Risk-coverage curve for {name}: error rate {rc["risk"][0]:.3f} on the most confident '
+            f'{rc["coverage"][0]:.0%}, {full:.3f} on all items">'
+            f'<rect x="{x(0)}" y="{y(top)}" width="{x(1) - x(0)}" height="{y(0) - y(top)}" class="frame"/>'
+            f'<line x1="{x(0)}" y1="{y(full):.1f}" x2="{x(1)}" y2="{y(full):.1f}" class="ideal"/>'
+            f'<polyline points="{line}" class="series"/>{dots}'
+            f'<text x="{x(0.5)}" y="{side - 6}" text-anchor="middle">coverage</text>'
+            f'<text transform="translate(12 {y(top / 2)}) rotate(-90)" text-anchor="middle">error rate</text>'
+            f'<text x="{x(0)}" y="{y(0) + 13}" text-anchor="middle">0</text>'
+            f'<text x="{x(1)}" y="{y(0) + 13}" text-anchor="middle">1</text>'
+            f'<text x="{x(0) - 4}" y="{y(top) + 4}" text-anchor="end">{top:g}</text>'
+            f'</svg><figcaption>{name}: risk vs coverage</figcaption></figure>')
+
+
 def render(scored: list[dict]) -> str:
     """Static page: one table per dataset, complete submissions ranked by Brier, partial ones listed after."""
     def e(v) -> str:  # model names and manifest text come from pull requests
@@ -230,7 +262,7 @@ def render(scored: list[dict]) -> str:
         soft = any("soft_ece" in d for _, d in rows)
         head = ["Model", "Readout", "n", "Accuracy", "ECE", "Brier", "AURC"]
         head += ["Soft ECE", "Soft Brier"] if soft else []
-        head += ["Order flips", "Typo any-flip", "Latency (ms)", "$ / 1k decisions"]
+        head += ["Order flips", "Typo any-flip", "Attack success", "Latency (ms)", "$ / 1k decisions"]
         body = []
         for s, d in rows:
             pert = d["perturbations"]
@@ -245,13 +277,15 @@ def render(scored: list[dict]) -> str:
             cells += [
                 f"{pert['order']['flip_rate']:.3f}" if "order" in pert else "—",
                 f"{pert['edit']['any_flip']:.3f}" if "edit" in pert else "—",
+                f"{pert['attack']['any_flip']:.3f}" if "attack" in pert else "—",
                 _latency(d) + f"<br><small>{e(s.get('gpu') or s.get('device') or '?')}</small>",
                 f"{d['usd_per_1k']:.4f}" if d.get("usd_per_1k") is not None else "—",
             ]
             body.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
         if not body:
             body = [f'<tr><td colspan="{len(head)}">No submissions yet.</td></tr>']
-        figs = "".join(_diagram(e(s["model"]), d["reliability"]) for s, d in rows)
+        figs = "".join(_diagram(e(s["model"]), d["reliability"]) + _curve(e(s["model"]), d["risk_coverage"])
+                       for s, d in rows)
         sections.append(
             f"<section><h2>{e(ds)}</h2><p class=\"note\">{e(src.task)}. Lower ECE, Brier and AURC are better; "
             f"brackets are 95% bootstrap intervals.</p><div class=\"scroll\"><table aria-label=\"{e(ds)}\"><thead><tr>"
@@ -299,8 +333,11 @@ Readouts measure different things: <code>d1</code> and <code>logprob</code> use 
 Soft scores compare against the share of raters picking each option; their floor is the raters' own disagreement.
 Latency percentiles are shown only for runs at batch size 1; batched runs share one timing per batch, so they show the
 amortised mean. Cost is hardware time (or API tokens) at the price each submitter declares, on the device shown.
+Attack success: share of items whose answer a greedy search flips within its edit budget (typos and
+contraction toggles such as "do not" / "don't"); lower is more robust.
 Reliability diagrams: each dot is one tenth of the items by confidence; dots below the dashed diagonal are
-overconfident.</p>
+overconfident. Risk-coverage curves: the error rate if only the most confident share of items is automated; the dashed
+line is the overall error rate, which abstaining at random would give, so a useful curve starts well below it.</p>
 {sections}
 </body>
 </html>

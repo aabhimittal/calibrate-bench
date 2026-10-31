@@ -1,4 +1,4 @@
-"""Perturbations (M3): option order, character-level typos, paraphrases.
+"""Perturbations (M3): option order, character-level typos, an adversarial minimal-edit search, paraphrases.
 
 Everything is seeded from (dataset, item id), so every model sees the same perturbed inputs.
 A variant's probabilities are always stored in the dataset's canonical option order.
@@ -6,6 +6,8 @@ A variant's probabilities are always stored in the dataset's canonical option or
 
 from __future__ import annotations
 
+import functools
+import gzip
 import hashlib
 import json
 import math
@@ -63,6 +65,83 @@ def typo(text: str, r: random.Random) -> str:
 def edits(text: str, n: int, dataset: str, item_id: str) -> list[str]:
     """n candidate minimal edits (one typo each) for an item: the attack budget."""
     return [typo(text, _rng("edit", dataset, item_id, k)) for k in range(n)]
+
+
+LEXICON = Path(__file__).parent / "lexicon.txt.gz"
+LEXICON_SOURCE = ("google/civil_comments", "f2970eb3a55777454c94069077cc8d9b5866312d",
+                  ("data/train-00000-of-00002.parquet", "data/train-00001-of-00002.parquet"))
+
+
+def write_lexicon(min_count: int = 5) -> Path:
+    """Regenerate lexicon.txt.gz: lowercase words of 3+ letters used at least min_count times in Civil Comments' train
+    split (CC0, 1.8M comments). Common misspellings make the list too large, never too small, which only makes the
+    attack more conservative."""
+    from collections import Counter
+
+    from huggingface_hub import hf_hub_download
+
+    repo, rev, files = LEXICON_SOURCE
+    counts = Counter()
+    for f in files:
+        for text in pd.read_parquet(hf_hub_download(repo, f, repo_type="dataset", revision=rev), columns=["text"]).text:
+            counts.update(re.findall(r"[a-z]{3,}", text.lower()))
+    LEXICON.write_bytes(gzip.compress("\n".join(sorted(w for w, n in counts.items() if n >= min_count)).encode(), mtime=0))
+    return LEXICON
+
+
+@functools.cache
+def lexicon() -> frozenset:
+    return frozenset(gzip.decompress(LEXICON.read_bytes()).decode().split("\n"))
+
+
+def makes_real_word(before: str, after: str) -> bool:
+    """Does the edit create a word that exists (that -> twat, great -> greta)? Then it may change the meaning."""
+    new = set(re.findall(r"[a-z]{3,}", after.lower())) - set(re.findall(r"[a-z]{3,}", before.lower()))
+    return bool(new & lexicon())
+
+
+# Word-level edits that keep the meaning exactly. "it's" and "that's" can also stand for "it has", so they are only
+# ever contracted, never expanded; the others toggle both ways.
+CONTRACTIONS = {"do not": "don't", "does not": "doesn't", "did not": "didn't", "is not": "isn't", "are not": "aren't",
+                "was not": "wasn't", "were not": "weren't", "cannot": "can't", "will not": "won't",
+                "would not": "wouldn't", "could not": "couldn't", "should not": "shouldn't", "have not": "haven't",
+                "has not": "hasn't", "i am": "i'm", "you are": "you're", "they are": "they're", "we are": "we're",
+                "i have": "i've", "i will": "i'll", "let us": "let's"}
+CONTRACT_ONLY = {"it is": "it's", "that is": "that's"}
+
+
+def word_edits(text: str) -> list[str]:
+    """Every single contraction toggle in text ("do not" <-> "don't"), case kept."""
+    pairs = [*CONTRACTIONS.items(), *((b, a) for a, b in CONTRACTIONS.items()), *CONTRACT_ONLY.items()]
+    out = []
+    for a, b in pairs:
+        for m in re.finditer(r"\b" + re.escape(a).replace("'", "['’]") + r"\b", text, re.I):
+            rep = b[0].upper() + b[1:] if m.group()[0].isupper() else b
+            out.append(text[: m.start()] + rep + text[m.end() :])
+    return out
+
+
+def attack(predict, text: str, budget: int, dataset: str, item_id: str, n_typos: int = 8):
+    """Greedy minimal-edit attack: (original probabilities, [(text, probabilities) after each of `budget` edits]).
+
+    Each step tries n_typos seeded typos and every contraction toggle of the current text and keeps the one that
+    lowers the probability of the original answer most; once the answer flips, later steps repeat that state.
+    A typo that lands on a real word (that -> twat) is skipped: a greedy search would otherwise seek those out.
+    `predict(texts)` returns one distribution per text, or None for a refused one.
+    """
+    p0 = predict([text])[0]
+    y = int(np.argmax(p0))
+    cur, cur_p, steps = text, p0, []
+    for k in range(budget):
+        if int(np.argmax(cur_p)) == y:
+            typos = [typo(cur, _rng("attack", dataset, item_id, k, j)) for j in range(n_typos)]
+            cands = [t for t in typos if not makes_real_word(cur, t)] + word_edits(cur)
+            cands = [c for c in dict.fromkeys(cands) if c != cur]
+            scored = [(c, q) for c, q in zip(cands, predict(cands) if cands else []) if q is not None]
+            if scored:
+                cur, cur_p = min(scored, key=lambda cq: cq[1][y])
+        steps.append((cur, cur_p))
+    return p0, steps
 
 
 def paraphrases(dataset: str) -> pd.DataFrame:
