@@ -136,7 +136,7 @@ Each text is cut in half by tokens, and the probe counts how many of the followi
 - **A handful of typos flips most answers, and high confidence does not protect against it.** A greedy attack with 3 edits flips 62–80% of sentiment answers across the four models. Among answers given at ≥0.9 confidence, 36–75% flip.
 - **d1's training does not buy robustness to typos.** On the 8 items where both d1-3B and its base model are ≥0.9 confident, each loses 5. Over all 50 items, 7 flip for the base model alone and 3 for d1 alone (exact McNemar p ≈ 0.34). The base model's higher confident-flip share (0.75 vs 0.60) comes from being confident on more, and harder, items.
 - **No model has usable signal on code-review risk.** d1-3B, d1-omni and Qwen are all less accurate than always answering "needs comment" (0.44–0.49 vs 0.54). None beats the base rate on Brier. All three put their highest confidence on the wrong answer: the top fifth by confidence is 25–50% accurate.
-- **d1-3B routes CLINC intents well** (accuracy 0.96 and ECE 0.123 on 50 items; it is underconfident, with 68%-confident answers all correct). QWEN_INTENT
+- **d1-3B routes CLINC intents well** (accuracy 0.96 and ECE 0.123 on 50 items; it is underconfident, with 68%-confident answers all correct). Qwen3.5-2B gets 0.40 on the same items, and its Brier score is not clearly better than the base rate (−0.164, CI −0.346 to +0.030).
 
 ### Models added
 
@@ -184,7 +184,13 @@ Both d1 models' 20 most confident answers are 17 "no comment" and 3 "needs comme
 
 ### Intent routing (CLINC150)
 
-INTENT_TABLE
+| model | n | accuracy | ECE [95% CI] | Brier − base rate [95% CI] | reliability (5 equal-mass bins) |
+|---|---:|---:|---:|---:|---|
+| d1-3B | 50 | 0.960 | 0.123 [0.073, 0.200] | −0.849 [−0.953, −0.712] | 0.68→1.00, 0.92→1.00, 0.96→0.90, 0.98→0.90, 0.99→1.00 (10 each) |
+| d1-omni-600M | 100 | 0.770 | 0.107 [0.083, 0.204] | −0.595 [−0.728, −0.451] | 0.54→0.40, 0.85→0.70, 0.97→0.85, 0.99→0.95, 1.00→0.95 (20 each) |
+| Qwen3.5-2B | 50 | 0.400 | 0.321 [0.248, 0.437] | −0.164 [−0.346, +0.030] | 0.31→0.00, 0.48→0.50, 0.61→0.30, 0.83→0.40, 0.98→0.80 (10 each) |
+
+Paired on the 50 shared items, d1-3B's Brier score is better than Qwen's by 0.685 (CI 0.523–0.860). d1-3B's ECE comes from underconfidence, not overconfidence. Its least confident fifth averages 0.68 and is 10/10 correct, so on this task a deployer could trust it more than it says. With 151 options, the full prompt lists every intent; this is the setting where the decision training helps most.
 
 ### Not done this round
 
