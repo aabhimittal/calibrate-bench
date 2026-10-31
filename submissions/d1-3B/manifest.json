@@ -45,6 +45,15 @@
       "n": 100,
       "refused": 0,
       "date": "2026-10-26T15:12:56+00:00"
+    },
+    "sentiment_hard/attack": {
+      "split": "test",
+      "limit": 100,
+      "batch_size": 16,
+      "variants": 3,
+      "n": 300,
+      "refused": 0,
+      "date": "2026-10-31T11:23:37+00:00"
     }
   },
   "usd_per_hour": 0.1785,
