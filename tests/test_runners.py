@@ -178,8 +178,9 @@ def _reply(stop="end_turn", stated=None):
     from types import SimpleNamespace
 
     text = json.dumps(stated or {})
-    return SimpleNamespace(stop_reason=stop, model="claude-served", content=[SimpleNamespace(type="thinking"),
-                                                                              SimpleNamespace(type="text", text=text)])
+    usage = SimpleNamespace(input_tokens=100, output_tokens=20)
+    return SimpleNamespace(stop_reason=stop, model="claude-served", usage=usage,
+                           content=[SimpleNamespace(type="thinking"), SimpleNamespace(type="text", text=text)])
 
 
 def test_verbal_renormalises_and_drops_refusals():
@@ -198,6 +199,7 @@ def test_verbal_renormalises_and_drops_refusals():
     v = runners.Verbal("claude-opus-5-5", client=client)
     preds = run(v, "sentiment_hard")
     assert len(preds) == 4 and preds.attrs["refused"] == 1
+    assert preds.attrs["usage"] == {"input_tokens": 500, "output_tokens": 100}  # the refused call is billed too
     np.testing.assert_allclose(preds.probs.iloc[0], [0.5, 0.25, 0.25])
     schema = client.calls[0]["output_config"]["format"]["schema"]
     assert schema["required"] == list(OPTIONS) and schema["additionalProperties"] is False

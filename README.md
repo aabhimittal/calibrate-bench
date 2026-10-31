@@ -2,7 +2,7 @@
 
 An independent, reproducible audit of whether decision models and LLMs are as calibrated as their vendors say. See [SPEC.md](SPEC.md).
 
-**Status:** M0 (dataset loaders + license manifest), M1 (d1, LLM logprob and Claude verbal runners), M3 (option-order, typo and paraphrase perturbations), M4 (CI-scored submissions and a static leaderboard), and the ECE / Brier / AURC part of M2, with soft-label support.
+**Status:** M0 (dataset loaders + license manifest), M1 (d1, LLM logprob and Claude verbal runners), M3 (option-order, typo and paraphrase perturbations), M4 (CI-scored submissions and a static leaderboard with reliability diagrams, latency and $ per 1k decisions), M5 round 1 (partial CPU runs, `findings/FINDINGS.md`), a contamination probe, and the ECE / Brier / AURC part of M2, with soft-label support.
 
 ```bash
 pip install -e ".[dev]"
@@ -56,7 +56,15 @@ Every runner asks the dataset's fixed `question` from the manifest.
 
 Revisions must be full commit SHAs. `trust_remote_code` runs the repo's Python, so a branch name would mean running whatever gets pushed next. Weights, tokenizer and code are loaded from one snapshot; d1's own loader fetches the tokenizer by repo name without a revision, and the snapshot closes that gap. I read d1's remote code at `051bcc46` before running it: it renders prompts and runs the model, with no network, subprocess or deserialization calls.
 
-Latency is batch wall time divided by batch size; per-decision p50/p99 needs `--batch-size 1`. The logprob runner encodes the prompt once per item, batched 16 wide, and deep-copies that cache for each chunk of options. Hybrid models such as Qwen3.5 can't batch-repeat their linear-attention state, but every cache can be copied; scores match a full forward pass per option to 1e-5.
+Latency is batch wall time divided by batch size, so every item in a batch shares one timing. The leaderboard shows p50/p99 only for runs at `--batch-size 1` and the amortised mean otherwise; neither means much off the hardware a model would be deployed on, so the device is shown next to it.
+
+Cost: pass `--usd-per-hour` (the price of the machine the run used) or, for `verbal`, `--usd-per-mtok INPUT OUTPUT` (the API's price per million tokens). The leaderboard turns that into $ per 1k decisions: amortised time per decision × hourly price, or billed tokens per call × token price, with refused calls billed too. The price is the submitter's claim and is shown as such; without one the column is empty.
+
+The logprob runner encodes the prompt once per item, batched 16 wide, and deep-copies that cache for each chunk of options. Hybrid models such as Qwen3.5 can't batch-repeat their linear-attention state, but every cache can be copied; scores match a full forward pass per option to 1e-5.
+
+## Contamination probe (`cbench.contamination`, SPEC §9)
+
+`python -m cbench.contamination MODEL SHA DATASET...` feeds the first half of each test text and counts how many of the next tokens are the model's top-1 prediction in a row: exactly what greedy decoding would reproduce verbatim. Runs of 8+ tokens are flagged and printed for a person to read. A passage every LM has memorised (the MIT license text) is the positive control; when a model fails it (LFM2.5-VL-3B and d1-3B do), the probe has no power on that model and says so. The test is one-sided: flags are strong evidence of memorisation, a clean result is weak evidence of its absence (a model can learn labels without memorising wording, and there is no known-unseen control set).
 
 ## Perturbations (`cbench.perturb`, M3)
 

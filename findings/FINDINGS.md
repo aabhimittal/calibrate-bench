@@ -108,6 +108,26 @@ d1 is close to the diagonal on sentiment. On toxicity it is slightly overconfide
 
 d1 scores single-letter option codes, the readout most exposed to position bias. Its base model, scored the same way, flips about one answer in six, so the order robustness comes from Liquid's training.
 
+### Contamination probe (`cbench.contamination`, 50 test texts of 24+ tokens per dataset)
+
+Each text is cut in half by tokens, and the probe counts how many of the following tokens the model's greedy continuation reproduces exactly. A run of 8 or more is flagged. The control is the MIT license, which code-trained models have seen thousands of times.
+
+| model | MIT control | sentiment | toxicity | intent (12–13 long enough) | ticket | code review |
+|---|---:|---:|---:|---:|---:|---:|
+| Qwen3.5-2B | **42 / 42** | 0 flagged, max 2 | 0, max 3 | 0, max 3 | 0, max 3 | 5, max 43 |
+| LFM2.5-VL-3B | **0 / 42** | 0, max 1 | 0, max 2 | 0, max 1 | 0, max 2 | 3, max 21 |
+| d1-3B | **0 / 42** | 0, max 2 | 0, max 2 | 0, max 3 | 0, max 2 | 4, max 14 |
+
+- **Qwen3.5-2B:** the probe works on this model, which recites the whole MIT continuation. It reproduces at most 3 tokens of any sentiment, toxicity, intent or ticket text, so there is **no sign of verbatim memorisation of those test sets**. That is still weak evidence: a model can learn a dataset's labels without memorising its wording.
+- **LFM2.5-VL-3B and d1-3B:** the probe has **no power** on this model family. It doesn't continue the MIT license either, whether or not it gets a BOS token, and all weights load. So their clean rows say nothing either way. This matters most for toxicity, because Liquid lists Civil Comments among d1's own evaluations.
+- **Code review flags are mostly predictable, not memorised:**
+  - license headers (BOINC GPL, Apache);
+  - import blocks;
+  - one exponential-backoff idiom (`if m.currentStep > maxStep { m.currentStep = maxStep }` followed by a mirrored `Success()`), which a model can infer from the code above it.
+
+  A flag on code needs a person to read it. This dataset's diffs come from public GitHub, so some pretraining overlap is expected anyway.
+- Banking77 and CLINC queries are mostly shorter than 24 tokens. Verbatim continuation can't test them; only 12–13 CLINC items qualified.
+
 ## Things this audit got wrong on the way, and fixed
 
 Each of these would have changed a headline number:
@@ -124,7 +144,7 @@ Each of these would have changed a headline number:
 - **One question wording per dataset.** Both general models' toxicity over-flagging may depend on how the question is put. Wording was not varied.
 - **Two readouts.** The base-model control removes this confound for the decision-training findings; the d1-vs-Qwen comparison keeps it.
 - **One general LLM, at 2B parameters.** Larger general models may calibrate better.
-- **Contamination.** Liquid lists Civil Comments among d1's own evaluations, and DynaSent, CLINC and Banking77 have been public for years.
+- **Contamination.** Liquid lists Civil Comments among d1's own evaluations, and DynaSent, CLINC and Banking77 have been public for years. The verbatim probe clears Qwen on the text datasets but cannot test d1 or its base model (see above), and no probe here tests label memorisation.
 - **Not covered this round:** paraphrase or typo runs, hosted models (no credentials), Decider, Winnow and Jev.
 
 ## Reproduce
@@ -139,6 +159,10 @@ python -m cbench.runners d1 $D sentiment_hard --limit 400 --out submissions/LFM2
     --weights LiquidAI/LFM2.5-VL-3B@35a118d938ce6d123ac2d371649f24a8efb69058
 python -m cbench.runners logprob Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc sentiment_hard --limit 400
 python findings/analyze.py submissions/d1-3B submissions/LFM2.5-VL-3B-via-d1 submissions/Qwen3.5-2B
+C="sentiment_hard toxicity intent_routing ticket_triage code_review_risk"
+python -m cbench.contamination Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc $C
+python -m cbench.contamination LiquidAI/LFM2.5-VL-3B 35a118d938ce6d123ac2d371649f24a8efb69058 $C
+python -m cbench.contamination LiquidAI/d1-3B 051bcc464b01b9f92942b364d9586b0ef5912432 $C --remote-code
 ```
 
 The base-model toxicity and option-order runs follow the same pattern. The prediction files behind these tables are submitted to the leaderboard separately, one pull request per model, so `analyze.py` reproduces every number above from `submissions/`.

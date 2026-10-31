@@ -145,3 +145,31 @@ def test_labels_file_matches_loaders(tmp_path):
     assert (both == committed.soft.notna()).all()
     np.testing.assert_allclose(np.concatenate(fresh.soft[both].to_numpy()),
                                np.concatenate(committed.soft[both].to_numpy()))
+
+
+def test_cost_latency_and_reliability(tmp_path):
+    # every item 10 ms at batch 1, hardware at $36/h: 10 ms * $0.01/s = $0.0001 per decision = $0.1 per 1k
+    sub, _ = make_sub(tmp_path / "a", n=50, manifest={"usd_per_hour": 36})
+    d = lb.score(sub)["datasets"]["sentiment_hard"]
+    assert d["usd_per_1k"] == pytest.approx(0.1) and d["latency_ms_p50"] == d["latency_ms_p99"] == 10
+    assert d["reliability"] == {"conf": pytest.approx([0.8] * 1), "acc": [1.0], "size": [50]}  # one tie group
+    # batched timings are shared per batch, so no percentiles; tokens: (1000 * $3 + 100 * $15) / 1M / 5 items * 1000
+    run = {"sentiment_hard": {"batch_size": 8, "n": 5, "refused": 0,
+                              "usage": {"input_tokens": 1000, "output_tokens": 100}}}
+    sub, _ = make_sub(tmp_path / "b", n=5, manifest={"runs": run, "usd_per_mtok": {"input": 3, "output": 15}})
+    d = lb.score(sub)["datasets"]["sentiment_hard"]
+    assert "latency_ms_p50" not in d and d["latency_ms_mean"] == 10 and d["usd_per_1k"] == pytest.approx(0.9)
+    page = lb.render([lb.score(tmp_path / "a"), lb.score(sub)])
+    assert page.count("<svg") == 2 and "p50 10 / p99 10" in page and "(mean, batch 8)" in page
+
+
+@pytest.mark.parametrize("manifest", [
+    {"usd_per_hour": "1"},
+    {"usd_per_hour": -1},
+    {"usd_per_mtok": {"input": 3}},
+    {"runs": {"sentiment_hard": {"batch_size": 1, "usage": {"input_tokens": -1, "output_tokens": 0}}}},
+])
+def test_validate_rejects_bad_prices(tmp_path, manifest):
+    sub, _ = make_sub(tmp_path / "m", n=5, manifest=manifest)
+    with pytest.raises(ValueError, match="usd_per|usage"):
+        lb.validate(sub)

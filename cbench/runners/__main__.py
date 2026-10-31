@@ -18,6 +18,8 @@ p.add_argument("--device")
 p.add_argument("--effort", default="low", help="verbal only")
 p.add_argument("--weights", help="d1 only: REPO@SHA of a same-architecture checkpoint to run through d1's readout")
 p.add_argument("--out", help="default: submissions/<model name>")
+p.add_argument("--usd-per-hour", type=float, help="price of the hardware this runs on, for $ per 1k decisions")
+p.add_argument("--usd-per-mtok", type=float, nargs=2, metavar=("INPUT", "OUTPUT"), help="verbal: API price per 1M tokens")
 a = p.parse_args()
 
 if a.runner == "verbal":
@@ -26,6 +28,10 @@ else:
     revision, *datasets = a.args
     runner = (D1(a.model, revision, a.device, a.weights) if a.runner == "d1"
               else LogprobLLM(a.model, revision, device=a.device))
+if a.usd_per_hour is not None:
+    runner.manifest["usd_per_hour"] = a.usd_per_hour
+if a.usd_per_mtok:
+    runner.manifest["usd_per_mtok"] = dict(zip(("input", "output"), a.usd_per_mtok))
 if unknown := set(datasets) - set(SOURCES):
     p.error(f"unknown datasets {sorted(unknown)}; choose from {list(SOURCES)}")
 out = a.out or f"submissions/{a.model.split('/')[-1]}"
