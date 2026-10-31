@@ -42,6 +42,7 @@ Inputs are validated (shape, label range, rows that are finite distributions), b
 pip install -e ".[runners]"
 python -m cbench.runners d1 LiquidAI/d1-3B 051bcc464b01b9f92942b364d9586b0ef5912432 sentiment_hard toxicity
 python -m cbench.runners logprob Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc sentiment_hard
+python -m cbench.runners d1 LiquidAI/d1-omni-600M 02b55d7076f15129e59ab3f94783f32c4b088674 sentiment_hard
 pip install -e ".[api]"   # needs Anthropic credentials
 python -m cbench.runners verbal claude-opus-5-5 sentiment_hard
 ```
@@ -71,6 +72,7 @@ The logprob runner encodes the prompt once per item, batched 16 wide, and deep-c
 ```bash
 python -m cbench.runners logprob MODEL SHA sentiment_hard --perturb order --variants 3
 python -m cbench.runners logprob MODEL SHA sentiment_hard --perturb edit --variants 8
+python -m cbench.runners logprob MODEL SHA sentiment_hard --perturb attack --variants 3
 python -m cbench.perturb report submissions/MODEL/predictions.parquet
 ```
 
@@ -80,13 +82,14 @@ Each family is a separate run whose rows sit next to the `orig` rows; the report
 |---|---|---|
 | `order` | The options are shown in another order (reversed first, then seeded shuffles); probabilities are mapped back to the canonical order | Option-order sensitivity: flip rate and KL |
 | `edit` | One keyboard typo (swap, drop, double or replace a letter, first letter kept) in a 4+ letter word; `--variants` is the attack budget | Robustness: per-edit flip rate, and `any_flip` = share of items where some edit in the budget flips the answer |
+| `attack` | A greedy search against the model: each step tries 8 seeded typos and every contraction toggle (`do not` ↔ `don't`) and keeps the edit that most lowers the probability of the original answer; `attack:k` is the answer after k+1 edits; `--variants` is the edit budget | Minimal-edit robustness: `any_flip` = share of items flipped within the budget; the per-variant flip rates give success at 1, 2, ... edits |
 | `paraphrase` | Stored paraphrases from `python -m cbench.perturb paraphrase DATASET` (Claude, structured output) | Consistency: paraphrase KL and flip rate |
 
 All perturbations are seeded by dataset and item, so every model sees identical inputs. `code_review_risk` gets order perturbations only: a typo or paraphrase in a diff changes the code, so the label may not hold.
 
 Paraphrases can change meaning, so they are not results until a person has checked a sample: `python -m cbench.perturb spotcheck DATASET sheet.csv`, fill `same_meaning` with y/n, then `python -m cbench.perturb agreement sheet.csv` and report that number next to paraphrase scores. Paraphrases written by Claude may suit Claude's own style; score Claude's verbal runner on them with that caveat, or use another generator.
 
-The edit family is a random-search attack with a fixed budget, not gradient or model-specific search, so `any_flip` is a lower bound on how attackable a model is. Word-level edits are not included: inserting or dropping words can change meaning ("not"), which a flip rate can't tell apart from fragility.
+The edit family is a random-search attack with a fixed budget, so its `any_flip` is a lower bound on how attackable a model is; the attack family searches against the model's own probabilities, a tighter (still greedy, still lower) bound. Its word-level edits are limited to contraction toggles because those keep the meaning exactly; inserting or dropping words can change it ("not"), which a flip rate can't tell apart from fragility. Ambiguous contractions ("it's" = it is or it has) are only ever contracted, never expanded. The attack costs up to 1 + budget × (8 + toggles) model calls per item.
 
 ## Submitting to the leaderboard (`cbench.leaderboard`, M4)
 

@@ -75,13 +75,18 @@ class D1:
         model, info = AutoModel.from_pretrained(path, trust_remote_code=True, dtype=dtype, output_loading_info=True)
         if info["missing_keys"] or info["unexpected_keys"]:  # transformers would fill missing ones with random values
             raise ValueError(f"checkpoint does not match {model_id}: {info}")
-        self.engine = model.to(device).engine
+        model = model.to(device)
+        # d1-3B answers through a SystemOne engine; d1-omni has probabilities_batch on the model itself and applies
+        # the per-type temperatures in its config.json to text answers
+        self.engine = getattr(model, "engine", model)
+        how = ("option codes scored at one slot, calibration=None" if hasattr(model, "engine")
+               else "one marker per option, per-type temperatures from config.json")
         self.manifest = {
             "runner": "d1",
             "model": repo if weights else model_id,
             "revision": rev if weights else revision,
-            "readout": "System One choice question, option codes scored at one slot, "
-            "calibration=None (vendor default)" + (f"; code from {model_id}@{revision}" if weights else ""),
+            "readout": f"System One choice question, {how} (vendor default)"
+            + (f"; code from {model_id}@{revision}" if weights else ""),
             **_env(device, dtype),
         }
 
@@ -248,7 +253,7 @@ class Verbal:
 
 VERBAL_SUFFIX = "\n\nFor each option, give the probability that it is the correct answer. The probabilities sum to 1."
 
-PERTURBATIONS = ("order", "edit", "paraphrase")
+PERTURBATIONS = ("order", "edit", "attack", "paraphrase")
 
 
 def _variants(ds, df, perturb, n):
@@ -261,6 +266,8 @@ def _variants(ds, df, perturb, n):
             yield f"order:{j}", df.id.tolist(), df.text.tolist(), order
     elif ds.source.name in perturb_mod.NO_TEXT_PERTURBATION:
         raise ValueError(f"{ds.source.name} has no text perturbations: edits would change what is being labeled")
+    elif perturb == "attack":
+        return  # searched against the model itself, in _attack
     elif perturb == "edit":
         cands = [perturb_mod.edits(t, n, ds.source.name, i) for i, t in zip(df.id, df.text)]
         for j in range(n):
@@ -276,6 +283,22 @@ def _variants(ds, df, perturb, n):
         raise ValueError(f"unknown perturbation {perturb!r}")
 
 
+def _attack(runner, ds, df, budget):
+    """Rows of the greedy minimal-edit attack: attack:k holds the answer after k+1 edits (or the flipped one)."""
+    if ds.source.name in perturb_mod.NO_TEXT_PERTURBATION:
+        raise ValueError(f"{ds.source.name} has no text perturbations: edits would change what is being labeled")
+    predict = lambda texts: runner.predict(texts, ds.source.question, ds.options)  # noqa: E731
+    rows, asked = [], 0
+    for i, text in zip(df.id, df.text):
+        t0 = time.perf_counter()
+        p0, steps = perturb_mod.attack(predict, text, budget, ds.source.name, i)
+        ms = (time.perf_counter() - t0) * 1000  # the whole search for this item
+        asked += budget
+        if p0 is not None:
+            rows += [(ds.source.name, i, f"attack:{k}", list(p), ms) for k, (_, p) in enumerate(steps)]
+    return rows, asked
+
+
 def run(runner, dataset: str, split: str = "test", limit: int | None = None, batch_size: int = 8,
         perturb: str | None = None, n_variants: int = 3):
     """Predictions for one dataset split: columns dataset, id, variant, probs, latency_ms.
@@ -285,7 +308,7 @@ def run(runner, dataset: str, split: str = "test", limit: int | None = None, bat
     """
     ds = load(dataset)
     df = ds.df[ds.df.split == split].head(limit)
-    rows, asked = [], 0
+    rows, asked = _attack(runner, ds, df, n_variants) if perturb == "attack" else ([], 0)
     usage = dict(getattr(runner, "usage", {}))
     for variant, ids, texts, order in _variants(ds, df, perturb, n_variants):
         asked += len(texts)

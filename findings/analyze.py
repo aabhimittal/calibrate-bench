@@ -115,6 +115,20 @@ def main(subs: list[Path]):
             print(f"| {s.name} | {x.dataset} | {x.family} | {x['items']} | {x.flip_rate:.3f} | {x.kl:.3f} | "
                   f"{x.any_flip:.3f} |")
 
+    print("\n## Adversarial edits (greedy search: typos and contraction toggles)\n")
+    print("| model | dataset | items | flipped by 1 / 2 / 3 edits | items ≥ 0.9 confident | of those flipped |")
+    print("|---|---|---:|---|---:|---:|")
+    for s in subs:
+        p = pd.read_parquet(s / "predictions.parquet")
+        for ds, g in p[p.variant.str.startswith("attack")].groupby("dataset"):
+            orig_p = p[(p.dataset == ds) & (p.variant == "orig")].set_index("id").probs
+            o = orig_p.map(np.argmax)
+            steps = [g[g.variant == f"attack:{k}"].set_index("id").probs.map(np.argmax) for k in range(3)]
+            flipped = [(a != o.loc[a.index]) for a in steps]
+            sure = orig_p.loc[steps[-1].index].map(max) >= 0.9  # a guardrail cares about the confident answers
+            print(f"| {s.name} | {ds} | {len(steps[-1])} | {' / '.join(f'{f.mean():.2f}' for f in flipped)} | "
+                  f"{int(sure.sum())} | {flipped[-1][sure].mean():.2f} |")
+
     print("\n## Base rates on the full test splits\n")
     for ds in LAB.index.get_level_values(0).unique():
         y = LAB.loc[ds].label.to_numpy()

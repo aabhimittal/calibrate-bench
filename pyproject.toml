@@ -19,4 +19,4 @@ build-backend = "setuptools.build_meta"
 include = ["cbench*"]
 
 [tool.setuptools.package-data]
-cbench = ["leaderboard/labels.parquet", "perturb/paraphrases/*.parquet"]
+cbench = ["leaderboard/labels.parquet", "perturb/paraphrases/*.parquet", "perturb/lexicon.txt.gz"]
