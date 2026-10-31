@@ -36,7 +36,7 @@ All runs: fp32 on CPU, the dataset's fixed question, and options shown as words 
 The first N items of each test split in the benchmark's hash order, the same items for every model:
 - 400 of `sentiment_hard` (DynaSent, adversarial 3-way sentiment);
 - 150 of `toxicity` (Civil Comments);
-- 100 of `ticket_triage` (Banking77, 77 options), d1 only. A matching `intent_routing` run (CLINC150, 151 options) was cut short by a machine restart and is not reported.
+- 100 of `ticket_triage` (Banking77, 77 options), d1 only. A matching `intent_routing` run (CLINC150, 151 options) was cut short by a machine restart; round 2 below reports one.
 
 Every comparison between models is paired on these items, with 95% bootstrap intervals.
 
@@ -128,6 +128,70 @@ Each text is cut in half by tokens, and the probe counts how many of the followi
   A flag on code needs a person to read it. This dataset's diffs come from public GitHub, so some pretraining overlap is expected anyway.
 - Banking77 and CLINC queries are mostly shorter than 24 tokens. Verbatim continuation can't test them; only 12–13 CLINC items qualified.
 
+## Round 2 (2026-10-31): d1-omni-600M, adversarial edits, code review and intent
+
+**Short version.**
+
+- **d1-omni-600M does not inherit d1-3B's calibration.** On hard sentiment its ECE is 0.259, and when it says 96% it is right 71% of the time. Its Brier score is no better than the base rate (+0.012, CI −0.053 to +0.075) and 0.263 worse than d1-3B's (paired, CI 0.209–0.322). It is close to d1-3B on 77-way ticket routing (ECE 0.101, accuracy 0.840).
+- **A handful of typos flips most answers, and high confidence does not protect against it.** A greedy attack with 3 edits flips 62–80% of sentiment answers across the four models. Among answers given at ≥0.9 confidence, 36–75% flip.
+- **d1's training does not buy robustness to typos.** On the 8 items where both d1-3B and its base model are ≥0.9 confident, each loses 5. Over all 50 items, 7 flip for the base model alone and 3 for d1 alone (exact McNemar p ≈ 0.34). The base model's higher confident-flip share (0.75 vs 0.60) comes from being confident on more, and harder, items.
+- **No model has usable signal on code-review risk.** d1-3B, d1-omni and Qwen are all less accurate than always answering "needs comment" (0.44–0.49 vs 0.54). None beats the base rate on Brier. All three put their highest confidence on the wrong answer: the top fifth by confidence is 25–50% accurate.
+- **d1-3B routes CLINC intents well** (accuracy 0.96 and ECE 0.123 on 50 items; it is underconfident, with 68%-confident answers all correct). QWEN_INTENT
+
+### Models added
+
+| Name | What it is | Readout |
+|---|---|---|
+| d1-omni-600M | `LiquidAI/d1-omni-600M@02b55d70`, Liquid's smaller decision model | System One `choice` question with one marker per option. The model's own `probabilities_batch` applies the per-type temperatures in its `config.json` (the vendor default) |
+
+### Calibration, d1-omni-600M
+
+| dataset | n | accuracy | ECE [95% CI] | Brier [95% CI] | Brier − base rate [95% CI] |
+|---|---:|---:|---:|---:|---:|
+| sentiment_hard | 400 | 0.507 | 0.259 [0.219, 0.307] | 0.679 [0.612, 0.739] | +0.012 [−0.053, +0.075] |
+| toxicity | 150 | 0.840 | 0.081 [0.048, 0.143] | 0.229 [0.153, 0.310] | +0.139 [+0.041, +0.240] |
+| ticket_triage | 100 | 0.840 | 0.101 [0.060, 0.171] | 0.245 [0.147, 0.362] | −0.741 [−0.839, −0.627] |
+| intent_routing | 100 | 0.770 | 0.107 [0.083, 0.204] | 0.358 [0.246, 0.474] | −0.595 [−0.728, −0.451] |
+| code_review_risk | 100 | 0.460 | 0.253 [0.224, 0.382] | 0.640 [0.550, 0.727] | +0.143 [+0.044, +0.237] |
+
+Reliability on sentiment, five bins of 80: 0.55→0.36, 0.68→0.47, 0.78→0.46, 0.87→0.53, 0.96→0.71. Option order flips 6.4% of its answers, against 2.9% for d1-3B and about 16% for both general models. It costs $0.0088 per 1k decisions at the CPU price used throughout ($0.1785/h), at 178 ms per decision (batch 8).
+
+### Adversarial edits (50 sentiment items, budget 3)
+
+The attack is a greedy search against each model's own probabilities. Each step tries 8 seeded keyboard typos and every contraction toggle (`do not` ↔ `don't`), and keeps the edit that most lowers the probability of the original answer. Typos that make a real word are skipped (see below).
+
+| model | flipped by 1 / 2 / 3 edits | answers ≥0.9 confident | of those flipped |
+|---|---|---:|---:|
+| d1-3B | 0.28 / 0.56 / 0.72 | 10 | 0.60 |
+| d1-omni-600M | 0.28 / 0.60 / 0.66 | 14 | 0.36 |
+| Qwen3.5-2B | 0.26 / 0.46 / 0.62 | 27 | 0.52 |
+| LFM2.5-VL-3B via d1 | 0.40 / 0.70 / 0.80 | 32 | 0.75 |
+
+At n=50 a share of 0.6 has a 95% interval of about ±0.14, so the rows cannot be told apart, except perhaps LFM against the rest after one edit. Greedy search gives a lower bound: a stronger search would flip more. Most successful attacks are plain misspellings ("vrey nie, no dout" flips one model from 0.89 positive to negative).
+
+**The first version of the attack cheated.** It found "that" → "twat" and "great" → "greta". Those are new words with new meaning, not noise, so a flip there says nothing about fragility. The attack now skips any typo that produces a word seen 5+ times in the Civil Comments train split (84,882 words, CC0). The d1-3B numbers barely moved: at 3 edits 0.70 became 0.72, on a different 100-item run.
+
+### Code review risk (100 items)
+
+| model | accuracy | Brier − base rate [95% CI] | reliability (5 bins of 20) |
+|---|---:|---:|---|
+| d1-3B | 0.440 | +0.053 [+0.010, +0.098] | 0.51→0.45, 0.54→0.55, 0.56→0.55, 0.59→0.40, 0.65→0.25 |
+| d1-omni-600M | 0.460 | +0.143 [+0.044, +0.237] | 0.52→0.55, 0.57→0.45, 0.63→0.65, 0.74→0.15, 0.87→0.50 |
+| Qwen3.5-2B | 0.490 | +0.052 [−0.016, +0.119] | 0.53→0.50, 0.56→0.45, 0.60→0.70, 0.66→0.35, 0.72→0.45 |
+| *always "needs comment"* | 0.540 | | |
+
+Both d1 models' 20 most confident answers are 17 "no comment" and 3 "needs comment". For d1-3B, 14 of those 20 diffs did need a comment. A deployer who auto-approves confident "no comment" calls would wave through the riskiest diffs. The Qwen row rules out the d1 readout as the cause. The task is out of reach for models this size, or its labels are noisier than they look; this audit has no annotator agreement figures to tell the two apart.
+
+### Intent routing (CLINC150)
+
+INTENT_TABLE
+
+### Not done this round
+
+- **Decider-2b**: the runner needs the `decider-ai` package, and installing it needs the maintainer's approval. The planned test is its card's claim of yes/no ECE 0.341 at the default temperature against 0.095 at the fitted one, on toxicity and code review.
+- **Winnow-E2B** is published only as GGUF weights behind a separately licensed llama.cpp server, so a pinned run would need that server's code.
+- **Paraphrases, hosted models and full test splits** need credentials or a GPU.
+
 ## Things this audit got wrong on the way, and fixed
 
 Each of these would have changed a headline number:
@@ -145,7 +209,7 @@ Each of these would have changed a headline number:
 - **Two readouts.** The base-model control removes this confound for the decision-training findings; the d1-vs-Qwen comparison keeps it.
 - **One general LLM, at 2B parameters.** Larger general models may calibrate better.
 - **Contamination.** Liquid lists Civil Comments among d1's own evaluations, and DynaSent, CLINC and Banking77 have been public for years. The verbatim probe clears Qwen on the text datasets but cannot test d1 or its base model (see above), and no probe here tests label memorisation.
-- **Not covered this round:** paraphrase or typo runs, hosted models (no credentials), Decider, Winnow and Jev.
+- **Not covered:** paraphrase runs, hosted models (no credentials), Decider, Winnow and Jev. Round 2 adds typo attacks on 50 items only.
 
 ## Reproduce
 
@@ -163,6 +227,13 @@ C="sentiment_hard toxicity intent_routing ticket_triage code_review_risk"
 python -m cbench.contamination Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc $C
 python -m cbench.contamination LiquidAI/LFM2.5-VL-3B 35a118d938ce6d123ac2d371649f24a8efb69058 $C
 python -m cbench.contamination LiquidAI/d1-3B 051bcc464b01b9f92942b364d9586b0ef5912432 $C --remote-code
+# round 2
+P="--usd-per-hour 0.1785"; A="sentiment_hard --perturb attack --variants 3 --limit 50 --batch-size 16 $P"
+python -m cbench.runners d1 LiquidAI/d1-omni-600M 02b55d7076f15129e59ab3f94783f32c4b088674 sentiment_hard --limit 400 $P
+python -m cbench.runners d1 $D $A          # and the same for the omni, Qwen and base-model runs
+python -m cbench.runners d1 $D code_review_risk --limit 100 --batch-size 4 $P
+python -m cbench.runners d1 $D intent_routing --limit 50 --batch-size 4 $P
+python -m cbench.runners logprob Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc intent_routing --limit 50 --batch-size 1 $P  # batch 4 runs out of 15 GB
 ```
 
 The base-model toxicity and option-order runs follow the same pattern. The prediction files behind these tables are submitted to the leaderboard separately, one pull request per model, so `analyze.py` reproduces every number above from `submissions/`.
