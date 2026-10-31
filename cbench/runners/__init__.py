@@ -170,7 +170,8 @@ class LogprobLLM:
         # linear-attention layers) can't be batch-repeated later, but every cache type can be deep-copied.
         with torch.no_grad():
             head = torch.tensor([prompt[:-1]] * b, device=self.device)
-            cache = self.model(input_ids=head, use_cache=True).past_key_values
+            # only the cache is used: full-vocab logits over a 151-option prompt, 16 rows wide, are ~8 GB in fp32
+            cache = self.model(input_ids=head, use_cache=True, logits_to_keep=1).past_key_values
         by_len: dict[int, list[int]] = {}
         for i, c in enumerate(conts):
             by_len.setdefault(len(c), []).append(i)
