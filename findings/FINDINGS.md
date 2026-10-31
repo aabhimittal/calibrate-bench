@@ -233,7 +233,7 @@ python -m cbench.runners d1 LiquidAI/d1-omni-600M 02b55d7076f15129e59ab3f94783f3
 python -m cbench.runners d1 $D $A          # and the same for the omni, Qwen and base-model runs
 python -m cbench.runners d1 $D code_review_risk --limit 100 --batch-size 4 $P
 python -m cbench.runners d1 $D intent_routing --limit 50 --batch-size 4 $P
-python -m cbench.runners logprob Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc intent_routing --limit 50 --batch-size 1 $P  # batch 4 runs out of 15 GB
+python -m cbench.runners logprob Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc intent_routing --limit 50 --batch-size 4 $P
 ```
 
 The base-model toxicity and option-order runs follow the same pattern. The prediction files behind these tables are submitted to the leaderboard separately, one pull request per model, so `analyze.py` reproduces every number above from `submissions/`.
