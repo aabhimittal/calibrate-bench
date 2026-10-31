@@ -1,0 +1,78 @@
+{
+  "runner": "d1",
+  "model": "LiquidAI/d1-omni-600M",
+  "revision": "02b55d7076f15129e59ab3f94783f32c4b088674",
+  "readout": "System One choice question, one marker per option, per-type temperatures from config.json (vendor default)",
+  "device": "cpu",
+  "dtype": "float32",
+  "torch": "2.14.1+cpu",
+  "transformers": "5.20.2",
+  "machine": "Linux x86_64",
+  "gpu": null,
+  "usd_per_hour": 0.1785,
+  "runs": {
+    "sentiment_hard": {
+      "split": "test",
+      "limit": 400,
+      "batch_size": 8,
+      "variants": null,
+      "n": 400,
+      "refused": 0,
+      "date": "2026-10-31T07:53:54+00:00"
+    },
+    "sentiment_hard/order": {
+      "split": "test",
+      "limit": 400,
+      "batch_size": 8,
+      "variants": 2,
+      "n": 800,
+      "refused": 0,
+      "date": "2026-10-31T07:57:08+00:00"
+    },
+    "toxicity": {
+      "split": "test",
+      "limit": 150,
+      "batch_size": 8,
+      "variants": null,
+      "n": 150,
+      "refused": 0,
+      "date": "2026-10-31T07:58:51+00:00"
+    },
+    "ticket_triage": {
+      "split": "test",
+      "limit": 100,
+      "batch_size": 8,
+      "variants": null,
+      "n": 100,
+      "refused": 0,
+      "date": "2026-10-31T08:04:50+00:00"
+    },
+    "intent_routing": {
+      "split": "test",
+      "limit": 100,
+      "batch_size": 8,
+      "variants": null,
+      "n": 100,
+      "refused": 0,
+      "date": "2026-10-31T08:14:13+00:00"
+    },
+    "code_review_risk": {
+      "split": "test",
+      "limit": 100,
+      "batch_size": 8,
+      "variants": null,
+      "n": 100,
+      "refused": 0,
+      "date": "2026-10-31T08:16:27+00:00"
+    },
+    "sentiment_hard/attack": {
+      "split": "test",
+      "limit": 50,
+      "batch_size": 16,
+      "variants": 3,
+      "n": 150,
+      "refused": 0,
+      "date": "2026-10-31T11:48:09+00:00"
+    }
+  }
+}
