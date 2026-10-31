@@ -190,7 +190,7 @@ Both d1 models' 20 most confident answers are 17 "no comment" and 3 "needs comme
 | d1-omni-600M | 100 | 0.770 | 0.107 [0.083, 0.204] | −0.595 [−0.728, −0.451] | 0.54→0.40, 0.85→0.70, 0.97→0.85, 0.99→0.95, 1.00→0.95 (20 each) |
 | Qwen3.5-2B | 50 | 0.400 | 0.321 [0.248, 0.437] | −0.164 [−0.346, +0.030] | 0.31→0.00, 0.48→0.50, 0.61→0.30, 0.83→0.40, 0.98→0.80 (10 each) |
 
-Paired on the 50 shared items, d1-3B's Brier score is better than Qwen's by 0.685 (CI 0.523–0.860). d1-3B's ECE comes from underconfidence, not overconfidence. Its least confident fifth averages 0.68 and is 10/10 correct, so on this task a deployer could trust it more than it says. With 151 options, the full prompt lists every intent; this is the setting where the decision training helps most.
+Paired on the 50 shared items, d1-3B's Brier score is better than Qwen's by 0.685 (CI 0.523–0.860). d1-3B's ECE comes from underconfidence, not overconfidence. Its least confident fifth averages 0.68 and is 10/10 correct, so on this task a deployer could trust it more than it says. The base model was not run on intent, so this gap mixes d1's training with its readout.
 
 ### Not done this round
 
