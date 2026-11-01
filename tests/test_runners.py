@@ -208,3 +208,14 @@ def test_verbal_renormalises_and_drops_refusals():
     client.create = lambda **kw: _reply("max_tokens")
     with pytest.raises(RuntimeError, match="max_tokens"):
         run(v, "sentiment_hard")
+
+
+def test_attack_variants_follow_the_greedy_search():
+    class Fragile(Fake):  # answer flips to "positive" as soon as the text changes
+        def predict(self, texts, question, options):
+            return [[0.6, 0.3, 0.1] if t.startswith("t") and len(t) == 2 else [0.1, 0.3, 0.6] for t in texts]
+
+    preds = run(Fragile(), "sentiment_hard", perturb="attack", n_variants=2)
+    assert preds.variant.value_counts().to_dict() == {"attack:0": 5, "attack:1": 5}
+    with pytest.raises(ValueError, match="no text perturbations"):
+        run(Fragile(), "code_review_risk", perturb="attack")

@@ -160,7 +160,7 @@ def test_cost_latency_and_reliability(tmp_path):
     d = lb.score(sub)["datasets"]["sentiment_hard"]
     assert "latency_ms_p50" not in d and d["latency_ms_mean"] == 10 and d["usd_per_1k"] == pytest.approx(0.9)
     page = lb.render([lb.score(tmp_path / "a"), lb.score(sub)])
-    assert page.count("<svg") == 2 and "p50 10 / p99 10" in page and "(mean, batch 8)" in page
+    assert page.count("<svg") == 4 and "p50 10 / p99 10" in page  # reliability + risk-coverage per submission and "(mean, batch 8)" in page
 
 
 @pytest.mark.parametrize("manifest", [
@@ -173,3 +173,11 @@ def test_validate_rejects_bad_prices(tmp_path, manifest):
     sub, _ = make_sub(tmp_path / "m", n=5, manifest=manifest)
     with pytest.raises(ValueError, match="usd_per|usage"):
         lb.validate(sub)
+
+
+def test_risk_coverage_is_sampled_to_drawable_points():
+    cov, risk = np.arange(1, 101) / 100, np.linspace(0, 0.3, 100)
+    rc = lb._sampled(cov, risk)
+    assert len(rc["coverage"]) == 20 and rc["coverage"][0] == 0.05 and rc["coverage"][-1] == 1.0
+    assert rc["risk"][-1] == pytest.approx(0.3)
+    assert lb._sampled(np.array([1.0]), np.array([0.2])) == {"coverage": [1.0], "risk": [0.2]}  # one tie group
