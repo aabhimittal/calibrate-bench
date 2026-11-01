@@ -29,7 +29,6 @@ def make_sub(path, n=None, dataset="sentiment_hard", probs=None, manifest=None, 
 
 @pytest.mark.parametrize("changed", [
     ["submissions/m/predictions.parquet", "cbench/metrics/__init__.py"],  # also edits the scorer
-    ["submissions/a/manifest.json", "submissions/b/manifest.json"],  # two submissions
     ["submissions/m/scores.json"],  # self-reported scores
     ["submissions/m/sub/predictions.parquet"],
     ["submissions/../cbench/manifest.json"],
@@ -40,8 +39,10 @@ def test_guard_rejects(changed):
         lb.guard(changed)
 
 
-def test_guard_accepts_one_submission():
-    assert lb.guard(["submissions/d1-3B/predictions.parquet", "submissions/d1-3B/manifest.json"]) == "d1-3B"
+def test_guard_accepts_one_or_more_submissions():
+    assert lb.guard(["submissions/d1-3B/predictions.parquet", "submissions/d1-3B/manifest.json"]) == ["d1-3B"]
+    assert lb.guard(["submissions/b/manifest.json", "submissions/a/manifest.json", "submissions/b/predictions.parquet"]) \
+        == ["a", "b"]
 
 
 def test_score_recomputes_from_probabilities(tmp_path):
