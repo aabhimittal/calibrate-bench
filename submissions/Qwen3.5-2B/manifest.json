@@ -39,6 +39,33 @@
       "n": 800,
       "refused": 0,
       "date": "2026-10-26T10:05:24+00:00"
+    },
+    "sentiment_hard/attack": {
+      "split": "test",
+      "limit": 50,
+      "batch_size": 16,
+      "variants": 3,
+      "n": 150,
+      "refused": 0,
+      "date": "2026-10-31T12:49:29+00:00"
+    },
+    "code_review_risk": {
+      "split": "test",
+      "limit": 100,
+      "batch_size": 4,
+      "variants": null,
+      "n": 100,
+      "refused": 0,
+      "date": "2026-10-31T16:42:54+00:00"
+    },
+    "intent_routing": {
+      "split": "test",
+      "limit": 50,
+      "batch_size": 4,
+      "variants": null,
+      "n": 50,
+      "refused": 0,
+      "date": "2026-10-31T19:57:25+00:00"
     }
   },
   "usd_per_hour": 0.1785,
