@@ -236,7 +236,7 @@ Round 2 compared d1-3B with Qwen on intent and code review, which mixes d1's tra
 | dataset | n | d1-3B | base model | Qwen3.5-2B | d1-3B − base model, Brier [95% CI] |
 |---|---:|---|---|---|---:|
 | intent_routing | 50 | 0.96 acc, ECE 0.123 | 0.50 acc, ECE 0.347 | 0.40 acc, ECE 0.321 | −0.710 [−0.930, −0.497] |
-| ticket_triage | 100 | 0.89 acc, ECE 0.055 | 0.65 acc, ECE 0.227 | QWEN_TICKET | −0.326 [−0.466, −0.192] |
+| ticket_triage | 100 | 0.89 acc, ECE 0.055 | 0.65 acc, ECE 0.227 | 0.60 acc, ECE 0.183 (50 items) | −0.326 [−0.466, −0.192] |
 | code_review_risk | 100 | 0.44 acc, ECE 0.253 | 0.43 acc, ECE 0.301 | 0.49 acc, ECE 0.218 | −0.140 [−0.241, −0.038] |
 
 - **On routing, d1's lead comes from training.** With the same readout, the base model scores 0.50 on intent against d1-3B's 0.96. It is also overconfident in the way d1 is not: on intent its 0.89-confident fifth is 20% right. On tickets, answers it gives at 0.98–1.00 are 85–90% right, where d1-3B's are 95–100%.
