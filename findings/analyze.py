@@ -129,6 +129,23 @@ def main(subs: list[Path]):
             print(f"| {s.name} | {ds} | {len(steps[-1])} | {' / '.join(f'{f.mean():.2f}' for f in flipped)} | "
                   f"{int(sure.sum())} | {flipped[-1][sure].mean():.2f} |")
 
+    print("\n## Paraphrases (flip rate against the original answer, split by the spot-check review)\n")
+    print("| model | dataset | pairs | flip rate | reviewed: same meaning | reviewed: changed |")
+    print("|---|---|---:|---:|---:|---:|")
+    for s in subs:
+        p = pd.read_parquet(s / "predictions.parquet")
+        for ds, g in p[p.variant.str.startswith("paraphrase")].groupby("dataset"):
+            o = p[(p.dataset == ds) & (p.variant == "orig")].set_index("id").probs.map(np.argmax)
+            g = g.assign(k=g.variant.str.split(":").str[1].astype(int), flip=g.probs.map(np.argmax) != g.id.map(o))
+            cells = []
+            for review in sorted(Path(__file__).parent.glob(f"paraphrase_review_{ds}_by_*.csv")):
+                r = pd.read_csv(review, keep_default_na=False).merge(g, on=["id", "k"])
+                for mark in ("y", "n"):
+                    f = r[r.same_meaning == mark].flip
+                    cells.append(f"{f.mean():.2f} of {len(f)}" if len(f) else "—")
+            cells = cells or ["—", "—"]
+            print(f"| {s.name} | {ds} | {len(g)} | {g.flip.mean():.2f} | {cells[0]} | {cells[1]} |")
+
     print("\n## Base rates on the full test splits\n")
     for ds in LAB.index.get_level_values(0).unique():
         y = LAB.loc[ds].label.to_numpy()
