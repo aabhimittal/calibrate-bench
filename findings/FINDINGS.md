@@ -198,6 +198,46 @@ Paired on the 50 shared items, d1-3B's Brier score is better than Qwen's by 0.68
 - **Winnow-E2B** is published only as GGUF weights behind a separately licensed llama.cpp server, so a pinned run would need that server's code.
 - **Paraphrases, hosted models and full test splits** need credentials or a GPU.
 
+## Round 3 (2026-11-02): paraphrase consistency, and coverage for the base model and Qwen
+
+**Short version.**
+
+- **d1's training does not make it more stable under rewording.** On sentiment rewrites that an AI review marked as keeping the meaning, d1-3B and its base model each flip 3 of 27 answers. Option order is the one perturbation where training clearly helps (16% → 3% flips). Typos (round 2) and paraphrases both change the input text rather than the answer format, and both leave the base model's fragility in place.
+- **Paraphrase flip rates on toxicity say almost nothing.** All 41 paraphrased toxicity items are non-toxic, d1-3B answers "non_toxic" on all 41, and Qwen answers "toxic" on 40. A model that always gives the same answer cannot flip, so their 0.01 and 0.06 measure a constant answer, not robustness. Only the base model, with a 27/14 split, gives a toxicity number worth reading: 0.24.
+- **Nobody has checked these paraphrases yet.** The spot-check sheets are blank. The meaning split below comes from an AI review (Claude), which marked 54% of sentiment pairs and 60% of toxicity pairs as keeping the meaning. That is a stand-in until a person fills the sheets, not the human spot-check the spec asks for.
+
+### Paraphrases
+
+There are no Anthropic credentials, so the paraphrases come from a local model: Qwen3.5-2B at a pinned commit, with greedy decoding (`python -m cbench.perturb paraphrase DATASET --items 50 --local Qwen/Qwen3.5-2B 15852e8c…`). It made 3 rewrites for each of the first 50 test items per dataset. When an output was not the requested JSON, or repeated the input word for word, the item was skipped, just as a refusal would be. That skipped 18 sentiment items and 9 toxicity items. The skipped items are not a random sample: they are probably the longer or odder texts. The one toxic item among the first 50 was skipped, which is how the toxicity set ended up all non-toxic.
+
+| model | dataset | pairs | flip rate | paraphrase KL | reviewed: same meaning | reviewed: changed |
+|---|---|---:|---:|---:|---:|---:|
+| d1-3B | sentiment_hard | 96 | 0.11 | 0.154 | 0.11 of 27 | 0.22 of 23 |
+| d1-omni-600M | sentiment_hard | 96 | 0.23 | 0.379 | 0.19 of 27 | 0.35 of 23 |
+| LFM2.5-VL-3B via d1 | sentiment_hard | 96 | 0.19 | 0.516 | 0.11 of 27 | 0.26 of 23 |
+| Qwen3.5-2B | sentiment_hard | 96 | 0.18 | 0.370 | 0.07 of 27 | 0.39 of 23 |
+| d1-3B | toxicity | 123 | 0.01 | 0.020 | 0.03 of 30 | 0.00 of 20 |
+| d1-omni-600M | toxicity | 123 | 0.02 | 0.126 | 0.00 of 30 | 0.05 of 20 |
+| LFM2.5-VL-3B via d1 | toxicity | 123 | 0.24 | 0.251 | 0.17 of 30 | 0.20 of 20 |
+| Qwen3.5-2B | toxicity | 123 | 0.06 | 0.074 | 0.03 of 30 | 0.00 of 20 |
+
+How to read the sentiment rows:
+
+- **Same meaning.** At 27 pairs, 2, 3, 3 and 5 flips are all within each other's noise. The training comparison rests on a tie (3 against 3), which is about as much as this sample can show.
+- **d1-3B's lower KL is real.** On all 96 pairs its KL is about a third of its base model's (0.154 against 0.516). Training makes its probabilities move less when the wording changes, even where its answer flips no less often on clean pairs.
+- **Qwen is graded on its own wording.** It looks like the ideal case: the most stable on true rewordings (0.07) and the most responsive to real changes (0.39). But it wrote these paraphrases, and its own phrasing is the most familiar input it could get. This data cannot separate that from robustness; a second paraphraser can.
+- **"Changed" is not an error rate.** The review marks a change in meaning, not a change in label. A rewrite can change the meaning and keep the sentiment, and then keeping the answer is correct.
+
+### Coverage
+
+COVERAGE_PLACEHOLDER
+
+### Not done this round
+
+- **The human spot-check.** The two sheets in `findings/paraphrase_spotcheck_*.csv` are blank. `analyze.py` reads any `paraphrase_review_<dataset>_by_<name>.csv`, so a person's review drops in next to Claude's.
+- **A second paraphraser**, which would remove Qwen's self-paraphrase bias. Claude is the obvious one once credentials exist.
+- **Decider-2b, Winnow, Jev, hosted models and full test splits** are blocked for the reasons in round 2.
+
 ## Things this audit got wrong on the way, and fixed
 
 Each of these would have changed a headline number:
@@ -215,7 +255,7 @@ Each of these would have changed a headline number:
 - **Two readouts.** The base-model control removes this confound for the decision-training findings; the d1-vs-Qwen comparison keeps it.
 - **One general LLM, at 2B parameters.** Larger general models may calibrate better.
 - **Contamination.** Liquid lists Civil Comments among d1's own evaluations, and DynaSent, CLINC and Banking77 have been public for years. The verbatim probe clears Qwen on the text datasets but cannot test d1 or its base model (see above), and no probe here tests label memorisation.
-- **Not covered:** paraphrase runs, hosted models (no credentials), Decider, Winnow and Jev. Round 2 adds typo attacks on 50 items only.
+- **Not covered:** hosted models (no credentials), Decider, Winnow and Jev. Typo attacks and paraphrases cover 50 items per dataset only, and nobody has checked the paraphrases yet (round 3).
 
 ## Reproduce
 
