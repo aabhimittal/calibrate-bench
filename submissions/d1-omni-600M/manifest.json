@@ -82,6 +82,15 @@
       "n": 96,
       "refused": 0,
       "date": "2026-11-02T16:21:54+00:00"
+    },
+    "toxicity/paraphrase": {
+      "split": "test",
+      "limit": 50,
+      "batch_size": 1,
+      "variants": 3,
+      "n": 123,
+      "refused": 0,
+      "date": "2026-11-02T17:16:24+00:00"
     }
   }
 }

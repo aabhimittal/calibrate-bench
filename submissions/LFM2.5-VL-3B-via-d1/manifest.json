@@ -54,6 +54,24 @@
       "n": 96,
       "refused": 0,
       "date": "2026-11-02T16:43:38+00:00"
+    },
+    "toxicity/paraphrase": {
+      "split": "test",
+      "limit": 50,
+      "batch_size": 1,
+      "variants": 3,
+      "n": 123,
+      "refused": 0,
+      "date": "2026-11-02T17:45:11+00:00"
+    },
+    "code_review_risk": {
+      "split": "test",
+      "limit": 100,
+      "batch_size": 4,
+      "variants": null,
+      "n": 100,
+      "refused": 0,
+      "date": "2026-11-02T18:45:19+00:00"
     }
   },
   "usd_per_hour": 0.1785,
