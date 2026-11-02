@@ -81,6 +81,15 @@
       "n": 50,
       "refused": 0,
       "date": "2026-11-02T19:59:49+00:00"
+    },
+    "ticket_triage": {
+      "split": "test",
+      "limit": 100,
+      "batch_size": 4,
+      "variants": null,
+      "n": 100,
+      "refused": 0,
+      "date": "2026-11-02T21:41:52+00:00"
     }
   },
   "usd_per_hour": 0.1785,
