@@ -2,7 +2,7 @@
 
   labels                      regenerate labels.parquet from the datasets (downloads them)
   guard < PATHS               check a PR's changed paths (NUL-separated, `git diff -z --name-only`) touch
-                              exactly one submission; prints its name
+                              only submissions; prints their names, one per line
   check DIR                   validate and score one submission; prints a Markdown summary
   build ROOT OUT              score every submission under ROOT into OUT/{leaderboard.json,index.html}
 """
@@ -28,7 +28,7 @@ try:
         print(lb.write_labels())
     elif a.cmd == "guard":
         # NUL-separated so a filename with spaces or newlines can't split into innocent-looking paths
-        print(lb.guard([f for f in sys.stdin.buffer.read().decode().split("\0") if f]))
+        print(*lb.guard([f for f in sys.stdin.buffer.read().decode().split("\0") if f]), sep="\n")
     elif a.cmd == "check":
         s = lb.score(a.dir)
         print(f"### {s['model']} ({s['runner']}, {s['revision']})\n")

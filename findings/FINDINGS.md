@@ -242,4 +242,4 @@ python -m cbench.runners d1 $D intent_routing --limit 50 --batch-size 4 $P
 python -m cbench.runners logprob Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc intent_routing --limit 50 --batch-size 4 $P
 ```
 
-The base-model toxicity and option-order runs follow the same pattern. The prediction files behind these tables are submitted to the leaderboard separately, one pull request per model, so `analyze.py` reproduces every number above from `submissions/`.
+The base-model toxicity and option-order runs follow the same pattern. The prediction files behind these tables are submitted to the leaderboard separately from the code, so `analyze.py` reproduces every number above from `submissions/`.

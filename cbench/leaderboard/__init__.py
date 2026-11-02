@@ -46,8 +46,8 @@ def labels() -> pd.DataFrame:
     return pd.read_parquet(LABELS).set_index(["dataset", "id"])
 
 
-def guard(changed: list[str]) -> str:
-    """The one submission a PR may add or change; raises if it touches anything else.
+def guard(changed: list[str]) -> list[str]:
+    """The submissions a PR adds or changes, sorted; raises if it touches anything else.
 
     The scoring code must be the base branch's, so a submission PR can't also edit how it is scored.
     """
@@ -57,9 +57,9 @@ def guard(changed: list[str]) -> str:
         if len(parts) != 3 or parts[0] != "submissions" or not NAME.fullmatch(parts[1]) or parts[2] not in FILES:
             raise ValueError(f"{path}: a submission PR may only change submissions/<name>/{{{','.join(sorted(FILES))}}}")
         dirs.add(parts[1])
-    if len(dirs) != 1:
-        raise ValueError(f"a submission PR must change exactly one submission, got {sorted(dirs) or 'none'}")
-    return dirs.pop()
+    if not dirs:
+        raise ValueError("a submission PR must change at least one submission")
+    return sorted(dirs)
 
 
 def validate(sub: Path) -> tuple[dict, pd.DataFrame]:
