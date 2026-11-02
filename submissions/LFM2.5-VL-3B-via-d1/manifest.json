@@ -72,6 +72,15 @@
       "n": 100,
       "refused": 0,
       "date": "2026-11-02T18:45:19+00:00"
+    },
+    "intent_routing": {
+      "split": "test",
+      "limit": 50,
+      "batch_size": 4,
+      "variants": null,
+      "n": 50,
+      "refused": 0,
+      "date": "2026-11-02T19:59:49+00:00"
     }
   },
   "usd_per_hour": 0.1785,
