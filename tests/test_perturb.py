@@ -110,7 +110,7 @@ def test_attack_skips_typos_that_make_a_real_word():
 
 
 def test_local_client_keeps_only_well_formed_rewrites():
-    import torch
+    torch = pytest.importorskip("torch")  # LocalClient.create needs it; CI installs only the base deps
 
     class Tok:
         reply = ""
