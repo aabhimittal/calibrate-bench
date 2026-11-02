@@ -190,13 +190,64 @@ Both d1 models' 20 most confident answers are 17 "no comment" and 3 "needs comme
 | d1-omni-600M | 100 | 0.770 | 0.107 [0.083, 0.204] | −0.595 [−0.728, −0.451] | 0.54→0.40, 0.85→0.70, 0.97→0.85, 0.99→0.95, 1.00→0.95 (20 each) |
 | Qwen3.5-2B | 50 | 0.400 | 0.321 [0.248, 0.437] | −0.164 [−0.346, +0.030] | 0.31→0.00, 0.48→0.50, 0.61→0.30, 0.83→0.40, 0.98→0.80 (10 each) |
 
-Paired on the 50 shared items, d1-3B's Brier score is better than Qwen's by 0.685 (CI 0.523–0.860). d1-3B's ECE comes from underconfidence, not overconfidence. Its least confident fifth averages 0.68 and is 10/10 correct, so on this task a deployer could trust it more than it says. The base model was not run on intent, so this gap mixes d1's training with its readout.
+Paired on the 50 shared items, d1-3B's Brier score is better than Qwen's by 0.685 (CI 0.523–0.860). d1-3B's ECE comes from underconfidence, not overconfidence. Its least confident fifth averages 0.68 and is 10/10 correct, so on this task a deployer could trust it more than it says. The base model was not run on intent in this round, so this gap mixes d1's training with its readout. Round 3 adds that control: most of the gap is training.
 
 ### Not done this round
 
 - **Decider-2b**: the runner needs the `decider-ai` package, and installing it needs the maintainer's approval. The planned test is its card's claim of yes/no ECE 0.341 at the default temperature against 0.095 at the fitted one, on toxicity and code review.
 - **Winnow-E2B** is published only as GGUF weights behind a separately licensed llama.cpp server, so a pinned run would need that server's code.
 - **Paraphrases, hosted models and full test splits** need credentials or a GPU.
+
+## Round 3 (2026-11-02): paraphrase consistency, and coverage for the base model and Qwen
+
+**Short version.**
+
+- **d1's training does not make it more stable under rewording.** On sentiment rewrites that an AI review marked as keeping the meaning, d1-3B and its base model each flip 3 of 27 answers. Option order is the one perturbation where training clearly helps (16% → 3% flips). Typos (round 2) and paraphrases both change the input text rather than the answer format, and both leave the base model's fragility in place.
+- **Paraphrase flip rates on toxicity say almost nothing.** All 41 paraphrased toxicity items are non-toxic, d1-3B answers "non_toxic" on all 41, and Qwen answers "toxic" on 40. A model that always gives the same answer cannot flip, so their 0.01 and 0.06 measure a constant answer, not robustness. Only the base model, with a 27/14 split, gives a toxicity number worth reading: 0.24.
+- **On routing, d1's lead over general models comes from training, not the readout.** With d1's readout, its base model gets 0.50 on intent (d1-3B 0.96) and 0.65 on tickets (0.89). On code review training lowers wrong confidence, but neither model beats the base rate.
+- **Nobody has checked these paraphrases yet.** The spot-check sheets are blank. The meaning split below comes from an AI review (Claude), which marked 54% of sentiment pairs and 60% of toxicity pairs as keeping the meaning. That is a stand-in until a person fills the sheets, not the human spot-check the spec asks for.
+
+### Paraphrases
+
+There are no Anthropic credentials, so the paraphrases come from a local model: Qwen3.5-2B at a pinned commit, with greedy decoding (`python -m cbench.perturb paraphrase DATASET --items 50 --local Qwen/Qwen3.5-2B 15852e8c…`). It made 3 rewrites for each of the first 50 test items per dataset. When an output was not the requested JSON, or repeated the input word for word, the item was skipped, just as a refusal would be. That skipped 18 sentiment items and 9 toxicity items. The skipped items are not a random sample: they are probably the longer or odder texts. The one toxic item among the first 50 was skipped, which is how the toxicity set ended up all non-toxic.
+
+| model | dataset | pairs | flip rate | paraphrase KL | reviewed: same meaning | reviewed: changed |
+|---|---|---:|---:|---:|---:|---:|
+| d1-3B | sentiment_hard | 96 | 0.11 | 0.154 | 0.11 of 27 | 0.22 of 23 |
+| d1-omni-600M | sentiment_hard | 96 | 0.23 | 0.379 | 0.19 of 27 | 0.35 of 23 |
+| LFM2.5-VL-3B via d1 | sentiment_hard | 96 | 0.19 | 0.516 | 0.11 of 27 | 0.26 of 23 |
+| Qwen3.5-2B | sentiment_hard | 96 | 0.18 | 0.370 | 0.07 of 27 | 0.39 of 23 |
+| d1-3B | toxicity | 123 | 0.01 | 0.020 | 0.03 of 30 | 0.00 of 20 |
+| d1-omni-600M | toxicity | 123 | 0.02 | 0.126 | 0.00 of 30 | 0.05 of 20 |
+| LFM2.5-VL-3B via d1 | toxicity | 123 | 0.24 | 0.251 | 0.17 of 30 | 0.20 of 20 |
+| Qwen3.5-2B | toxicity | 123 | 0.06 | 0.074 | 0.03 of 30 | 0.00 of 20 |
+
+How to read the sentiment rows:
+
+- **Same meaning.** At 27 pairs, 2, 3, 3 and 5 flips are all within each other's noise. The training comparison rests on a tie (3 against 3), which is about as much as this sample can show.
+- **d1-3B's lower KL is real.** On all 96 pairs its KL is about a third of its base model's (0.154 against 0.516). Training makes its probabilities move less when the wording changes, even where its answer flips no less often on clean pairs.
+- **Qwen is graded on its own wording.** It looks like the ideal case: the most stable on true rewordings (0.07) and the most responsive to real changes (0.39). But it wrote these paraphrases, and its own phrasing is the most familiar input it could get. This data cannot separate that from robustness; a second paraphraser can.
+- **"Changed" is not an error rate.** The review marks a change in meaning, not a change in label. A rewrite can change the meaning and keep the sentiment, and then keeping the answer is correct.
+
+### Coverage
+
+Round 2 compared d1-3B with Qwen on intent and code review, which mixes d1's training with its readout. The base model (LFM2.5-VL-3B read out through d1's own code) now covers the same items, which removes the readout from the comparison.
+
+| dataset | n | d1-3B | base model | Qwen3.5-2B | d1-3B − base model, Brier [95% CI] |
+|---|---:|---|---|---|---:|
+| intent_routing | 50 | 0.96 acc, ECE 0.123 | 0.50 acc, ECE 0.347 | 0.40 acc, ECE 0.321 | −0.710 [−0.930, −0.497] |
+| ticket_triage | 100 | 0.89 acc, ECE 0.055 | 0.65 acc, ECE 0.227 | 0.60 acc, ECE 0.183 (50 items) | −0.326 [−0.466, −0.192] |
+| code_review_risk | 100 | 0.44 acc, ECE 0.253 | 0.43 acc, ECE 0.301 | 0.49 acc, ECE 0.218 | −0.140 [−0.241, −0.038] |
+
+- **On routing, d1's lead comes from training.** With the same readout, the base model scores 0.50 on intent against d1-3B's 0.96. It is also overconfident in the way d1 is not: on intent its 0.89-confident fifth is 20% right. On tickets, answers it gives at 0.98–1.00 are 85–90% right, where d1-3B's are 95–100%.
+- **On code review, training lowers wrong confidence but does not add signal.** The base model's top fifth averages 0.92 confidence at 45% accuracy, where d1-3B's averages 0.65. Neither beats always answering "needs comment" (0.54), and the base model is further from it on Brier (+0.194 [+0.087, +0.292]).
+- These are 50–100 items each, and ticket triage is a 77-way task. The intervals show the gaps are large, but the sample is not the full test split.
+
+### Not done this round
+
+- **The human spot-check.** The two sheets in `findings/paraphrase_spotcheck_*.csv` are blank. `analyze.py` reads any `paraphrase_review_<dataset>_by_<name>.csv`, so a person's review drops in next to Claude's.
+- **A second paraphraser**, which would remove Qwen's self-paraphrase bias. Claude is the obvious one once credentials exist.
+- **Decider-2b, Winnow, Jev, hosted models and full test splits** are blocked for the reasons in round 2.
 
 ## Things this audit got wrong on the way, and fixed
 
@@ -215,7 +266,7 @@ Each of these would have changed a headline number:
 - **Two readouts.** The base-model control removes this confound for the decision-training findings; the d1-vs-Qwen comparison keeps it.
 - **One general LLM, at 2B parameters.** Larger general models may calibrate better.
 - **Contamination.** Liquid lists Civil Comments among d1's own evaluations, and DynaSent, CLINC and Banking77 have been public for years. The verbatim probe clears Qwen on the text datasets but cannot test d1 or its base model (see above), and no probe here tests label memorisation.
-- **Not covered:** paraphrase runs, hosted models (no credentials), Decider, Winnow and Jev. Round 2 adds typo attacks on 50 items only.
+- **Not covered:** hosted models (no credentials), Decider, Winnow and Jev. Typo attacks and paraphrases cover 50 items per dataset only, and nobody has checked the paraphrases yet (round 3).
 
 ## Reproduce
 
@@ -240,6 +291,17 @@ python -m cbench.runners d1 $D $A          # and the same for the omni, Qwen and
 python -m cbench.runners d1 $D code_review_risk --limit 100 --batch-size 4 $P
 python -m cbench.runners d1 $D intent_routing --limit 50 --batch-size 4 $P
 python -m cbench.runners logprob Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc intent_routing --limit 50 --batch-size 4 $P
+# round 3
+Q="Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc"
+python -m cbench.perturb paraphrase sentiment_hard --items 50 --local $Q      # and toxicity
+python -m cbench.runners d1 $D sentiment_hard --perturb paraphrase --variants 3 --limit 50 --batch-size 8 $P
+python -m cbench.runners d1 $D toxicity --perturb paraphrase --variants 3 --limit 50 --batch-size 1 $P
+    # and the same for omni, the base model (--out/--weights as above) and Qwen (logprob, batch 4)
+L="--out submissions/LFM2.5-VL-3B-via-d1 --weights LiquidAI/LFM2.5-VL-3B@35a118d938ce6d123ac2d371649f24a8efb69058"
+python -m cbench.runners d1 $D code_review_risk --limit 100 --batch-size 4 $L $P
+python -m cbench.runners d1 $D intent_routing --limit 50 --batch-size 4 $L $P
+python -m cbench.runners d1 $D ticket_triage --limit 100 --batch-size 4 $L $P
+python -m cbench.runners logprob $Q ticket_triage --limit 50 --batch-size 4 $P
 ```
 
 The base-model toxicity and option-order runs follow the same pattern. The prediction files behind these tables are submitted to the leaderboard separately from the code, so `analyze.py` reproduces every number above from `submissions/`.
