@@ -190,7 +190,7 @@ Both d1 models' 20 most confident answers are 17 "no comment" and 3 "needs comme
 | d1-omni-600M | 100 | 0.770 | 0.107 [0.083, 0.204] | −0.595 [−0.728, −0.451] | 0.54→0.40, 0.85→0.70, 0.97→0.85, 0.99→0.95, 1.00→0.95 (20 each) |
 | Qwen3.5-2B | 50 | 0.400 | 0.321 [0.248, 0.437] | −0.164 [−0.346, +0.030] | 0.31→0.00, 0.48→0.50, 0.61→0.30, 0.83→0.40, 0.98→0.80 (10 each) |
 
-Paired on the 50 shared items, d1-3B's Brier score is better than Qwen's by 0.685 (CI 0.523–0.860). d1-3B's ECE comes from underconfidence, not overconfidence. Its least confident fifth averages 0.68 and is 10/10 correct, so on this task a deployer could trust it more than it says. The base model was not run on intent, so this gap mixes d1's training with its readout.
+Paired on the 50 shared items, d1-3B's Brier score is better than Qwen's by 0.685 (CI 0.523–0.860). d1-3B's ECE comes from underconfidence, not overconfidence. Its least confident fifth averages 0.68 and is 10/10 correct, so on this task a deployer could trust it more than it says. The base model was not run on intent in this round, so this gap mixes d1's training with its readout. Round 3 adds that control: most of the gap is training.
 
 ### Not done this round
 
@@ -204,6 +204,7 @@ Paired on the 50 shared items, d1-3B's Brier score is better than Qwen's by 0.68
 
 - **d1's training does not make it more stable under rewording.** On sentiment rewrites that an AI review marked as keeping the meaning, d1-3B and its base model each flip 3 of 27 answers. Option order is the one perturbation where training clearly helps (16% → 3% flips). Typos (round 2) and paraphrases both change the input text rather than the answer format, and both leave the base model's fragility in place.
 - **Paraphrase flip rates on toxicity say almost nothing.** All 41 paraphrased toxicity items are non-toxic, d1-3B answers "non_toxic" on all 41, and Qwen answers "toxic" on 40. A model that always gives the same answer cannot flip, so their 0.01 and 0.06 measure a constant answer, not robustness. Only the base model, with a 27/14 split, gives a toxicity number worth reading: 0.24.
+- **On routing, d1's lead over general models comes from training, not the readout.** With d1's readout, its base model gets 0.50 on intent (d1-3B 0.96) and 0.65 on tickets (0.89). On code review training lowers wrong confidence, but neither model beats the base rate.
 - **Nobody has checked these paraphrases yet.** The spot-check sheets are blank. The meaning split below comes from an AI review (Claude), which marked 54% of sentiment pairs and 60% of toxicity pairs as keeping the meaning. That is a stand-in until a person fills the sheets, not the human spot-check the spec asks for.
 
 ### Paraphrases
@@ -230,7 +231,17 @@ How to read the sentiment rows:
 
 ### Coverage
 
-COVERAGE_PLACEHOLDER
+Round 2 compared d1-3B with Qwen on intent and code review, which mixes d1's training with its readout. The base model (LFM2.5-VL-3B read out through d1's own code) now covers the same items, which removes the readout from the comparison.
+
+| dataset | n | d1-3B | base model | Qwen3.5-2B | d1-3B − base model, Brier [95% CI] |
+|---|---:|---|---|---|---:|
+| intent_routing | 50 | 0.96 acc, ECE 0.123 | 0.50 acc, ECE 0.347 | 0.40 acc, ECE 0.321 | −0.710 [−0.930, −0.497] |
+| ticket_triage | 100 | 0.89 acc, ECE 0.055 | 0.65 acc, ECE 0.227 | QWEN_TICKET | −0.326 [−0.466, −0.192] |
+| code_review_risk | 100 | 0.44 acc, ECE 0.253 | 0.43 acc, ECE 0.301 | 0.49 acc, ECE 0.218 | −0.140 [−0.241, −0.038] |
+
+- **On routing, d1's lead comes from training.** With the same readout, the base model scores 0.50 on intent against d1-3B's 0.96. It is also overconfident in the way d1 is not: on intent its 0.89-confident fifth is 20% right. On tickets, answers it gives at 0.98–1.00 are 85–90% right, where d1-3B's are 95–100%.
+- **On code review, training lowers wrong confidence but does not add signal.** The base model's top fifth averages 0.92 confidence at 45% accuracy, where d1-3B's averages 0.65. Neither beats always answering "needs comment" (0.54), and the base model is further from it on Brier (+0.194 [+0.087, +0.292]).
+- These are 50–100 items each, and ticket triage is a 77-way task. The intervals show the gaps are large, but the sample is not the full test split.
 
 ### Not done this round
 
@@ -280,6 +291,17 @@ python -m cbench.runners d1 $D $A          # and the same for the omni, Qwen and
 python -m cbench.runners d1 $D code_review_risk --limit 100 --batch-size 4 $P
 python -m cbench.runners d1 $D intent_routing --limit 50 --batch-size 4 $P
 python -m cbench.runners logprob Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc intent_routing --limit 50 --batch-size 4 $P
+# round 3
+Q="Qwen/Qwen3.5-2B 15852e8c16360a2fea060d615a32b45270f8a8fc"
+python -m cbench.perturb paraphrase sentiment_hard --items 50 --local $Q      # and toxicity
+python -m cbench.runners d1 $D sentiment_hard --perturb paraphrase --variants 3 --limit 50 --batch-size 8 $P
+python -m cbench.runners d1 $D toxicity --perturb paraphrase --variants 3 --limit 50 --batch-size 1 $P
+    # and the same for omni, the base model (--out/--weights as above) and Qwen (logprob, batch 4)
+L="--out submissions/LFM2.5-VL-3B-via-d1 --weights LiquidAI/LFM2.5-VL-3B@35a118d938ce6d123ac2d371649f24a8efb69058"
+python -m cbench.runners d1 $D code_review_risk --limit 100 --batch-size 4 $L $P
+python -m cbench.runners d1 $D intent_routing --limit 50 --batch-size 4 $L $P
+python -m cbench.runners d1 $D ticket_triage --limit 100 --batch-size 4 $L $P
+python -m cbench.runners logprob $Q ticket_triage --limit 50 --batch-size 4 $P
 ```
 
 The base-model toxicity and option-order runs follow the same pattern. The prediction files behind these tables are submitted to the leaderboard separately from the code, so `analyze.py` reproduces every number above from `submissions/`.
