@@ -66,6 +66,33 @@
       "n": 50,
       "refused": 0,
       "date": "2026-10-31T19:57:25+00:00"
+    },
+    "sentiment_hard/paraphrase": {
+      "split": "test",
+      "limit": 50,
+      "batch_size": 4,
+      "variants": 3,
+      "n": 96,
+      "refused": 0,
+      "date": "2026-11-02T16:50:07+00:00"
+    },
+    "toxicity/paraphrase": {
+      "split": "test",
+      "limit": 50,
+      "batch_size": 4,
+      "variants": 3,
+      "n": 123,
+      "refused": 0,
+      "date": "2026-11-02T17:53:07+00:00"
+    },
+    "ticket_triage": {
+      "split": "test",
+      "limit": 50,
+      "batch_size": 4,
+      "variants": null,
+      "n": 50,
+      "refused": 0,
+      "date": "2026-11-02T22:58:51+00:00"
     }
   },
   "usd_per_hour": 0.1785,
