@@ -1,6 +1,7 @@
 """python -m cbench.perturb ...
 
   paraphrase DATASET [--items N] [--k K] [--model M]   generate and store paraphrases (needs Anthropic credentials)
+             [--local MODEL SHA]                      ... or with a pinned local chat model, on CPU
   spotcheck DATASET OUT.csv [--n N]                     sample pairs for a human to mark same_meaning y/n
   agreement SHEET.csv                                   share of checked pairs marked meaning-preserving
   lexicon                                               regenerate the real-word list the attack avoids (downloads)
@@ -20,6 +21,7 @@ g.add_argument("dataset")
 g.add_argument("--items", type=int, default=200)
 g.add_argument("--k", type=int, default=3)
 g.add_argument("--model", default="claude-opus-5-5")
+g.add_argument("--local", nargs=2, metavar=("MODEL", "SHA"))
 s = sub.add_parser("spotcheck")
 s.add_argument("dataset")
 s.add_argument("out")
@@ -30,7 +32,8 @@ sub.add_parser("report").add_argument("predictions")
 a = p.parse_args()
 
 if a.cmd == "paraphrase":
-    print(perturb.generate_paraphrases(a.dataset, a.items, a.k, a.model))
+    client = perturb.LocalClient(*a.local) if a.local else None
+    print(perturb.generate_paraphrases(a.dataset, a.items, a.k, a.model, client))
 elif a.cmd == "spotcheck":
     perturb.spotcheck_sheet(a.dataset, a.n).to_csv(a.out, index=False)
     print(a.out)
