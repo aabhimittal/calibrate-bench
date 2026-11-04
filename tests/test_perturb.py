@@ -107,3 +107,36 @@ def test_attack_skips_typos_that_make_a_real_word():
     assert perturb.makes_real_word("on top of that", "on top of twat")
     assert perturb.makes_real_word("great deal", "greta deal") and perturb.makes_real_word("good", "god")
     assert not perturb.makes_real_word("shut down", "sut down") and not perturb.makes_real_word("wonder", "woncer")
+
+
+def test_local_client_keeps_only_well_formed_rewrites():
+    torch = pytest.importorskip("torch")  # LocalClient.create needs it; CI installs only the base deps
+
+    class Tok:
+        reply = ""
+        def apply_chat_template(self, msgs, **_):
+            return msgs[0]["content"]
+        def __call__(self, prompt, **_):
+            return SimpleNamespace(input_ids=torch.zeros((1, 2), dtype=torch.long))
+        def decode(self, ids, **_):
+            return self.reply
+
+    class Model:
+        def generate(self, ids, **_):
+            return torch.zeros((1, 5), dtype=torch.long)
+
+    c = object.__new__(perturb.LocalClient)
+    c.tok, c.model, c.name, c.messages = Tok(), Model(), "m@sha", c
+    fmt = {"format": {"schema": {"required": ["p0", "p1"]}}}
+    msg = [{"role": "user", "content": perturb.PARAPHRASE_PROMPT.format(k=2, text="good food")}]
+    cases = [('Sure! {"p0": " tasty food ", "p1": "nice food"}', "end_turn"),
+             ('{"p0": "tasty food"}', "invalid"),                    # a key missing
+             ('{"p0": "good food", "p1": "nice food"}', "invalid"),  # repeats the input
+             ("tasty food\nnice food", "invalid")]                   # not JSON
+    for reply, stop in cases:
+        c.tok.reply = reply
+        r = c.create(messages=msg, output_config=fmt, max_tokens=100)
+        assert r.stop_reason == stop and r.model == "m@sha"
+    c.tok.reply = cases[0][0]
+    out = json.loads(c.create(messages=msg, output_config=fmt, max_tokens=100).content[0].text)
+    assert out == {"p0": "tasty food", "p1": "nice food"}

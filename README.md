@@ -83,7 +83,7 @@ Each family is a separate run whose rows sit next to the `orig` rows; the report
 | `order` | The options are shown in another order (reversed first, then seeded shuffles); probabilities are mapped back to the canonical order | Option-order sensitivity: flip rate and KL |
 | `edit` | One keyboard typo (swap, drop, double or replace a letter, first letter kept) in a 4+ letter word; `--variants` is the attack budget | Robustness: per-edit flip rate, and `any_flip` = share of items where some edit in the budget flips the answer |
 | `attack` | A greedy search against the model: each step tries 8 seeded typos and every contraction toggle (`do not` ↔ `don't`) and keeps the edit that most lowers the probability of the original answer; `attack:k` is the answer after k+1 edits; `--variants` is the edit budget | Minimal-edit robustness: `any_flip` = share of items flipped within the budget; the per-variant flip rates give success at 1, 2, ... edits |
-| `paraphrase` | Stored paraphrases from `python -m cbench.perturb paraphrase DATASET` (Claude, structured output) | Consistency: paraphrase KL and flip rate |
+| `paraphrase` | Stored paraphrases from `python -m cbench.perturb paraphrase DATASET` (Claude, structured output; or `--local MODEL SHA` for a pinned local chat model, greedy, no credentials) | Consistency: paraphrase KL and flip rate |
 
 All perturbations are seeded by dataset and item, so every model sees identical inputs. `code_review_risk` gets order perturbations only: a typo or paraphrase in a diff changes the code, so the label may not hold.
 

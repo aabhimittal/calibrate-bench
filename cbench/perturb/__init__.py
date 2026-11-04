@@ -15,6 +15,7 @@ import random
 import re
 import string
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -192,6 +193,47 @@ def generate_paraphrases(dataset: str, n_items: int = 200, k: int = 3, model: st
     path.parent.mkdir(exist_ok=True)
     pd.DataFrame(rows, columns=["id", "k", "text", "generator"]).to_parquet(path, index=False)
     return path
+
+
+class LocalClient:
+    """A local chat model behind the one Anthropic call generate_paraphrases makes, for runs without credentials.
+
+    Greedy decoding, so the paraphrases are reproducible from the pinned weights. Output that isn't the requested
+    JSON, or that repeats the input verbatim, is reported as not finished and the item is skipped, as a refusal is.
+    """
+
+    def __init__(self, model_id: str, revision: str):
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        from cbench.runners import _snapshot
+
+        path = _snapshot(model_id, revision)
+        self.tok = AutoTokenizer.from_pretrained(path)
+        self.model = AutoModelForCausalLM.from_pretrained(path, dtype=torch.float32).eval()
+        self.name, self.messages = f"{model_id}@{revision}", self
+
+    def create(self, messages, output_config, max_tokens, **_):
+        import torch
+
+        keys = output_config["format"]["schema"]["required"]
+        user = messages[0]["content"]
+        text = user.split("Text:\n", 1)[-1]
+        prompt = self.tok.apply_chat_template(
+            [{"role": "user", "content": f"{user}\n\nReply with only a JSON object with the keys {', '.join(keys)}."}],
+            tokenize=False, add_generation_prompt=True, enable_thinking=False)
+        ids = self.tok(prompt, return_tensors="pt", add_special_tokens=False).input_ids
+        with torch.no_grad():
+            out = self.model.generate(ids, max_new_tokens=min(max_tokens, 160 + len(text)), do_sample=False)
+        reply = self.tok.decode(out[0, ids.shape[1]:], skip_special_tokens=True)
+        stop = "invalid"
+        try:
+            got = json.loads(reply[reply.index("{"): reply.rindex("}") + 1])
+            if all(isinstance(got.get(k), str) and got[k].strip() and got[k].strip() != text.strip() for k in keys):
+                reply, stop = json.dumps({k: got[k].strip() for k in keys}), "end_turn"
+        except ValueError:
+            pass
+        return SimpleNamespace(stop_reason=stop, model=self.name, content=[SimpleNamespace(type="text", text=reply)])
 
 
 def spotcheck_sheet(dataset: str, n: int = 50) -> pd.DataFrame:
